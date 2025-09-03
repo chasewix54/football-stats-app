@@ -308,9 +308,8 @@ class FootballSpec(SportSpec):
         totals = pd.DataFrame(grouped).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
         return totals
 
-
 # ---------------------------
-# Placeholder specs (scaffold only)
+# Soccer tball implementation (fully functional)
 # ---------------------------
 class SoccerSpec(SportSpec):
     name = "Soccer"
@@ -519,7 +518,157 @@ class SoccerSpec(SportSpec):
 
         totals = pd.DataFrame(grouped).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
         return totals
+    
+# ---------------------------
+# Lacrosse implementation (New)
+# ---------------------------
+class LacrosseSpec(SportSpec):
+    name = "Lacrosse"
+    sides = ["All"]
 
+    def build_form(self, roster: pd.DataFrame) -> Dict[str, Any]:
+        c1, c2 = st.columns([2, 1])
+        player_key = c1.selectbox("Player", options=roster["player_key"].tolist(), key="lc_player_select")
+        stat_type = c2.selectbox(
+            "Stat",
+            options=[
+                "Goal","Assist","Shot","Ground Ball","Faceoff","Takeaway","Interception","Turnover","Penalty","Save","Goal Allowed","Goalie Minutes"
+            ],
+            key="lc_stat_type",
+        )
+
+        new_rows: List[dict] = []
+        with st.form("lc_log_form", clear_on_submit=True):
+            assist_key = None
+            on_target = None
+            faceoff_result = None
+            penalty_minutes = None
+            minutes = None
+
+            if stat_type == "Goal":
+                assist_opts = [pk for pk in roster["player_key"].tolist() if pk != player_key]
+                assist_key = st.selectbox("Assisted by (optional)", options=["None"] + assist_opts, key="lc_assist")
+
+            elif stat_type == "Shot":
+                on_target = st.selectbox("Shot on goal?", ["Yes","No"], key="lc_sog") == "Yes"
+
+            elif stat_type == "Faceoff":
+                faceoff_result = st.selectbox("Faceoff Result", ["Win","Loss"], key="lc_faceoff")
+
+            elif stat_type == "Penalty":
+                penalty_minutes = st.number_input("Penalty Minutes", value=1.0, step=0.5, key="lc_penmin")
+
+            elif stat_type == "Goalie Minutes":
+                minutes = st.number_input("Minutes Played (Goalie)", value=12.0, step=1.0, key="lc_minutes")
+
+            notes = st.text_input("Notes (optional)", key="lc_notes")
+            submitted = st.form_submit_button("Add Stat")
+
+        if submitted:
+            pr = roster.loc[roster["player_key"] == player_key].iloc[0]
+            base = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "sport": self.name,
+                "player_key": player_key,
+                "first_name": pr["first_name"],
+                "last_name": pr["last_name"],
+                "number": int(pr["number"]) if pd.notna(pr["number"]) else None,
+                "positions": pr["positions"],
+                "side": "All",
+                "notes": notes.strip(),
+            }
+
+            if stat_type == "Goal":
+                new_rows.append(base | {"stat_type":"Goal","goal":1})
+                new_rows.append(base | {"stat_type":"Shot","on_target":1})
+                if assist_key and assist_key != "None":
+                    try:
+                        a = roster.loc[roster["player_key"] == assist_key].iloc[0]
+                        new_rows.append(base | {
+                            "player_key": a["player_key"],
+                            "first_name": a["first_name"],
+                            "last_name": a["last_name"],
+                            "number": int(a["number"]) if pd.notna(a["number"]) else None,
+                            "positions": a["positions"],
+                            "stat_type": "Assist",
+                        })
+                    except Exception:
+                        pass
+            elif stat_type == "Assist":
+                new_rows.append(base | {"stat_type":"Assist"})
+            elif stat_type == "Shot":
+                new_rows.append(base | {"stat_type":"Shot","on_target":int(on_target)})
+            elif stat_type == "Ground Ball":
+                new_rows.append(base | {"stat_type":"Ground Ball"})
+            elif stat_type == "Faceoff":
+                new_rows.append(base | {"stat_type":"Faceoff","outcome":faceoff_result})
+            elif stat_type in ("Takeaway","Interception","Turnover","Save","Goal Allowed"):
+                new_rows.append(base | {"stat_type":stat_type})
+            elif stat_type == "Penalty":
+                new_rows.append(base | {"stat_type":"Penalty","penalty_minutes":penalty_minutes})
+            elif stat_type == "Goalie Minutes":
+                new_rows.append(base | {"stat_type":"Goalie Minutes","minutes":minutes})
+
+        return {"submitted": submitted, "new_rows": new_rows}
+
+    def aggregate_totals(self, logs: pd.DataFrame) -> pd.DataFrame:
+        df = logs.copy()
+        df = df[df["sport"] == self.name]
+        if df.empty:
+            return pd.DataFrame()
+
+        df["on_target"] = pd.to_numeric(df.get("on_target",0), errors="coerce").fillna(0).astype(int)
+        df["penalty_minutes"] = pd.to_numeric(df.get("penalty_minutes",0), errors="coerce").fillna(0).astype(float)
+        df["minutes"] = pd.to_numeric(df.get("minutes",0), errors="coerce").fillna(0).astype(float)
+
+        grouped = []
+        for pk, grp in df.groupby("player_key"):
+            row = {
+                "player_key": pk,
+                "first_name": grp["first_name"].iloc[0],
+                "last_name": grp["last_name"].iloc[0],
+                "number": grp["number"].iloc[0],
+                "positions": grp["positions"].iloc[0],
+            }
+            row["Goals"] = int((grp["stat_type"]=="Goal").sum())
+            shots = grp[grp["stat_type"]=="Shot"]
+            row["Shots"] = len(shots)
+            row["Shots on Goal"] = int(shots["on_target"].sum())
+            row["Assists"] = int((grp["stat_type"]=="Assist").sum())
+            row["Points"] = row["Goals"] + row["Assists"]
+            row["Ground Balls"] = int((grp["stat_type"]=="Ground Ball").sum())
+            # Faceoffs
+            fo = grp[grp["stat_type"]=="Faceoff"]
+            row["Faceoffs Attempted"] = len(fo)
+            row["Faceoffs Won"] = int((fo["outcome"]=="Win").sum())
+            row["Faceoff %"] = round(100*row["Faceoffs Won"]/row["Faceoffs Attempted"],1) if row["Faceoffs Attempted"] else 0.0
+            # Defensive
+            row["Takeaways"] = int((grp["stat_type"]=="Takeaway").sum())
+            row["Interceptions"] = int((grp["stat_type"]=="Interception").sum())
+            row["Caused Turnovers"] = row["Takeaways"] + row["Interceptions"]
+            row["Turnovers"] = int((grp["stat_type"]=="Turnover").sum())
+            # Penalties
+            pen = grp[grp["stat_type"]=="Penalty"]
+            row["Penalties"] = len(pen)
+            row["Penalty Minutes"] = float(pen["penalty_minutes"].sum()) if not pen.empty else 0.0
+            # Goalie
+            row["Saves"] = int((grp["stat_type"]=="Save").sum())
+            row["Goals Allowed"] = int((grp["stat_type"]=="Goal Allowed").sum())
+            row["Minutes"] = float(grp.loc[grp["stat_type"]=="Goalie Minutes","minutes"].sum())
+            sog_faced = row["Saves"] + row["Goals Allowed"]
+            row["Shots on Goal Faced"] = sog_faced
+            row["Save %"] = round(100*row["Saves"]/sog_faced,1) if sog_faced else 0.0
+            row["GAA"] = round((row["Goals Allowed"]*48)/row["Minutes"],2) if row["Minutes"]>0 else 0.0
+            # Derived shooting
+            row["Shooting %"] = round(100*row["Goals"]/row["Shots on Goal"],1) if row["Shots on Goal"] else 0.0
+            row["SOG Rate %"] = round(100*row["Shots on Goal"]/row["Shots"],1) if row["Shots"] else 0.0
+            grouped.append(row)
+
+        return pd.DataFrame(grouped).sort_values(by=["last_name","first_name"]).reset_index(drop=True)
+
+# ---------------------------
+# Placeholder specs (scaffold only)
+# ---------------------------
 class BaseballSpec(SportSpec):
     name = "Baseball"
     sides = ["All"]
@@ -532,8 +681,12 @@ class BasketballSpec(SportSpec):
     name = "Basketball"
     sides = ["All"]
 
-class LacrosseSpec(SportSpec):
-    name = "Lacrosse"
+class BaseballSpec(SportSpec):
+    name = "Baseball"
+    sides = ["All"]
+
+class BasketballSpec(SportSpec):
+    name = "Basketball"
     sides = ["All"]
 
 class BaseballSpec(SportSpec):
@@ -543,23 +696,6 @@ class BaseballSpec(SportSpec):
 class BasketballSpec(SportSpec):
     name = "Basketball"
     sides = ["All"]
-
-class LacrosseSpec(SportSpec):
-    name = "Lacrosse"
-    sides = ["All"]
-
-class BaseballSpec(SportSpec):
-    name = "Baseball"
-    sides = ["All"]
-
-class BasketballSpec(SportSpec):
-    name = "Basketball"
-    sides = ["All"]
-
-class LacrosseSpec(SportSpec):
-    name = "Lacrosse"
-    sides = ["All"]
-
 
 SPORTS: Dict[str, SportSpec] = {
     "Football": FootballSpec(),
