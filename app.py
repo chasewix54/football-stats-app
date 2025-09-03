@@ -3,8 +3,8 @@ Multi-Sport Stats App (Streamlit + Google Sheets)
 ------------------------------------------------
 Scaffolded for multiple sports with a pluggable registry.
 
-Included sports (scaffold): Football ✅ (fully implemented), Soccer ⚠️ (coming next),
-Baseball ⚠️, Basketball ⚠️, Lacrosse ⚠️.
+Included sports (scaffold): Football ✅ (fully implemented), Soccer ✅ (fully implemented),
+Baseball ⚠️, Basketball ⚠️ (Comming Next), Lacrosse ✅ (fully implemented).
 
 Features
 - Create a game (sport + date + opponent + Google Sheet URL/ID)
@@ -119,7 +119,7 @@ class SportSpec:
         })
 
     def build_form(self, roster: pd.DataFrame) -> Dict[str, Any]:
-        st.info("Sport not implemented yet. Choose Football or check back soon.")
+        st.info("Sport not implemented yet. Choose Football, Soccer, or Lacrosse. Additional Sports will be available soon.")
         submitted = st.form_submit_button("Add Stat")
         return {"submitted": False, "new_rows": []}
 
@@ -309,7 +309,7 @@ class FootballSpec(SportSpec):
         return totals
 
 # ---------------------------
-# Soccer tball implementation (fully functional)
+# Soccer implementation (fully functional)
 # ---------------------------
 class SoccerSpec(SportSpec):
     name = "Soccer"
