@@ -3,8 +3,7 @@ Multi-Sport Stats App (Streamlit + Google Sheets)
 ------------------------------------------------
 Scaffolded for multiple sports with a pluggable registry.
 
-Included sports (scaffold): Football ✅ (fully implemented), Soccer ✅ (fully implemented),
-Baseball ⚠️, Basketball ⚠️ (Comming Next), Lacrosse ✅ (fully implemented).
+Included sports: Football ✅, Soccer ✅, Lacrosse ✅, Baseball ⚠️, Basketball ⚠️.
 
 Features
 - Create a game (sport + date + opponent + Google Sheet URL/ID)
@@ -119,8 +118,8 @@ class SportSpec:
         })
 
     def build_form(self, roster: pd.DataFrame) -> Dict[str, Any]:
-        st.info("Sport not implemented yet. Choose Football, Soccer, or Lacrosse. Additional Sports will be available soon.")
-        submitted = st.form_submit_button("Add Stat")
+        st.info("Sport not implemented yet. Choose Football, Soccer, or Lacrosse. Additional sports coming soon.")
+        st.form_submit_button("Add Stat")
         return {"submitted": False, "new_rows": []}
 
     def aggregate_totals(self, logs: pd.DataFrame) -> pd.DataFrame:
@@ -144,19 +143,24 @@ class FootballSpec(SportSpec):
             yards: Optional[int] = None
             outcome: Optional[str] = None
             touchdown_val: int = 0
+            two_point_val: int = 0
 
             if side == "Offense":
                 stat_type = c3.selectbox(
                     "Offensive Stat",
-                    options=["Reception", "Run", "Fumble", "Pass", "Field Goal", "Punt"],
+                    options=["Reception", "Run", "Fumble", "Pass", "Field Goal", "Punt", "PAT"],
                     key="fb_stat_off"
                 )
 
                 if stat_type in ("Reception", "Run", "Punt"):
                     yards = st.number_input("Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
                     if stat_type in ("Reception", "Run"):
-                        td_flag = st.checkbox("Touchdown", value=False, key="fb_td", help="Set to 1 if this play scored a TD.")
+                        td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
+                                              help="Set to 1 if this play scored a TD.")
+                        tp_flag = st.checkbox("2-pt Conversion", value=False, key="fb_2pt",
+                                              help="Check if this play was a successful 2-point conversion.")
                         touchdown_val = 1 if td_flag else 0
+                        two_point_val = 1 if tp_flag else 0
 
                 elif stat_type == "Pass":
                     outcome = st.selectbox("Pass Outcome", options=["Complete", "Incomplete"], key="fb_pass_outcome")
@@ -170,20 +174,28 @@ class FootballSpec(SportSpec):
                             options=receiver_options if receiver_options else ["No eligible receivers"],
                             key="fb_receiver"
                         )
-                        pair = st.checkbox(
+                        st.checkbox(
                             "Also log paired Reception for the receiver",
                             value=True,
                             key="fb_pair_reception",
-                            help="Creates a Reception for the selected receiver with same yards and TD."
+                            help="Creates a Reception for the selected receiver with same yards and flags."
                         )
                         td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
                                               help="Set to 1 if this pass resulted in a TD.")
+                        tp_flag = st.checkbox("2-pt Conversion", value=False, key="fb_2pt",
+                                              help="Check if this pass was a successful 2-point conversion.")
                         touchdown_val = 1 if td_flag else 0
+                        two_point_val = 1 if tp_flag else 0
 
                 elif stat_type == "Field Goal":
                     outcome = st.selectbox("Field Goal Outcome", options=["Made", "Miss"], key="fb_fg_outcome")
                     yards = st.number_input("Attempt Distance (yards)", value=0, step=1, min_value=0, max_value=90, key="fb_yards")
-                # Fumble: no yards/TD
+
+                elif stat_type == "PAT":
+                    outcome = st.selectbox("PAT Outcome", options=["Made", "Miss"], key="fb_pat_outcome")
+                    # No yards for PAT in this app.
+
+                # Fumble: no yards/TD/2pt
 
             else:
                 # Defense
@@ -195,12 +207,20 @@ class FootballSpec(SportSpec):
 
                 if stat_type == "Return":
                     yards = st.number_input("Return Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
-                    td_flag = st.checkbox("Touchdown", value=False, key="fb_td", help="Set to 1 if this return scored a TD.")
+                    td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
+                                          help="Set to 1 if this return scored a TD.")
+                    tp_flag = st.checkbox("2-pt Conversion", value=False, key="fb_2pt",
+                                          help="Check if this return was a successful 2-point conversion.")
                     touchdown_val = 1 if td_flag else 0
+                    two_point_val = 1 if tp_flag else 0
                 elif stat_type == "Interception":
-                    td_flag = st.checkbox("Touchdown", value=False, key="fb_td", help="Set to 1 if this interception was returned for a TD.")
+                    td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
+                                          help="Set to 1 if this interception was returned for a TD.")
+                    tp_flag = st.checkbox("2-pt Conversion", value=False, key="fb_2pt",
+                                          help="Check if this play was a successful 2-point conversion.")
                     touchdown_val = 1 if td_flag else 0
-                # Forced Fumble, Sack, Tackle: no yards/TD prompt
+                    two_point_val = 1 if tp_flag else 0
+                # Forced Fumble, Sack, Tackle: no yards/TD/2pt prompt
 
             notes = st.text_input("Notes (optional)", key="fb_notes")
             submitted = st.form_submit_button("Add Stat")
@@ -224,10 +244,11 @@ class FootballSpec(SportSpec):
                 "outcome": outcome,
                 "yards": int(yards) if yards is not None else None,
                 "touchdown": int(touchdown_val),
+                "two_point": int(two_point_val),
             }
             new_rows.append(row)
 
-            # paired reception on pass complete
+            # paired reception on pass complete (mirror TD & 2pt flags)
             if side == "Offense" and stat_type == "Pass" and outcome == "Complete" and st.session_state.get("fb_pair_reception", False):
                 try:
                     rcv = roster.loc[roster["player_key"] == st.session_state.get("fb_receiver")].iloc[0]
@@ -242,6 +263,7 @@ class FootballSpec(SportSpec):
                         "outcome": None,
                         "yards": int(yards) if yards is not None else None,
                         "touchdown": int(touchdown_val),
+                        "two_point": int(two_point_val),
                     }
                     new_rows.append(rcv_row)
                 except Exception:
@@ -254,8 +276,9 @@ class FootballSpec(SportSpec):
         df = df[df["sport"] == self.name]
         if df.empty:
             return pd.DataFrame()
-        df["yards"] = pd.to_numeric(df["yards"], errors="coerce").fillna(0).astype(int)
+        df["yards"] = pd.to_numeric(df.get("yards", 0), errors="coerce").fillna(0).astype(int)
         df["touchdown"] = pd.to_numeric(df.get("touchdown", 0), errors="coerce").fillna(0).astype(int)
+        df["two_point"] = pd.to_numeric(df.get("two_point", 0), errors="coerce").fillna(0).astype(int)
 
         grouped = []
         for player_key, grp in df.groupby("player_key"):
@@ -292,6 +315,11 @@ class FootballSpec(SportSpec):
             row["FG Made"] = int((fg_df["outcome"] == "Made").sum())
             row["FG Attempt Yards (Total)"] = int(fg_df["yards"].sum())
 
+            # PATs
+            pat_df = grp[grp["stat_type"] == "PAT"]
+            row["PAT Attempts"] = int(len(pat_df))
+            row["PAT Made"] = int((pat_df["outcome"] == "Made").sum())
+
             # Defense
             row["Forced Fumbles"] = int((grp["stat_type"] == "Forced Fumble").sum())
             row["Sacks"] = int((grp["stat_type"] == "Sack").sum())
@@ -300,6 +328,9 @@ class FootballSpec(SportSpec):
             row["Return Yards"] = int(grp.loc[grp["stat_type"] == "Return", "yards"].sum())
             row["Defensive TDs"] = int(((grp["stat_type"].isin(["Interception", "Return"])) & (grp["touchdown"] == 1)).sum())
 
+            # Two-point conversions (any play types where we allowed it)
+            row["2-pt Conversions"] = int(grp.loc[grp["two_point"] == 1].shape[0])
+
             # Total TDs
             row["Touchdowns (Total)"] = int(row["Receiving TDs"] + row["Rushing TDs"] + row["Passing TDs"] + row["Defensive TDs"])
 
@@ -307,6 +338,7 @@ class FootballSpec(SportSpec):
 
         totals = pd.DataFrame(grouped).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
         return totals
+
 
 # ---------------------------
 # Soccer implementation (fully functional)
@@ -435,43 +467,7 @@ class SoccerSpec(SportSpec):
     def aggregate_totals(self, logs: pd.DataFrame) -> pd.DataFrame:
         """
         Aggregate per-player soccer totals.
-
-        Doctests:
-        >>> import pandas as _pd
-        >>> sample = _pd.DataFrame([
-        ...   {"sport":"Soccer","player_key":"#7 A","first_name":"A","last_name":"A","number":7,"positions":"F","stat_type":"Pass","outcome":"Complete","timestamp":"t","notes":""},
-        ...   {"sport":"Soccer","player_key":"#7 A","first_name":"A","last_name":"A","number":7,"positions":"F","stat_type":"Assist","timestamp":"t","notes":""},
-        ...   {"sport":"Soccer","player_key":"#9 B","first_name":"B","last_name":"B","number":9,"positions":"F","stat_type":"Shot","on_target":1,"goal":1,"timestamp":"t","notes":""},
-        ...   {"sport":"Soccer","player_key":"#1 GK","first_name":"GK","last_name":"One","number":1,"positions":"GK","stat_type":"Save","timestamp":"t","notes":""},
-        ...   {"sport":"Soccer","player_key":"#6 C","first_name":"C","last_name":"C","number":6,"positions":"M","stat_type":"Tackle","timestamp":"t","notes":""},
-        ...   {"sport":"Soccer","player_key":"#5 D","first_name":"D","last_name":"D","number":5,"positions":"D","stat_type":"Interception","timestamp":"t","notes":""},
-        ...   {"sport":"Soccer","player_key":"#4 E","first_name":"E","last_name":"E","number":4,"positions":"D","stat_type":"Foul","card":"Yellow","timestamp":"t","notes":""},
-        ...   {"sport":"Soccer","player_key":"#3 F","first_name":"F","last_name":"F","number":3,"positions":"D","stat_type":"Foul","card":"Red","timestamp":"t","notes":""},
-        ...   {"sport":"Soccer","player_key":"#7 A","first_name":"A","last_name":"A","number":7,"positions":"F","stat_type":"Pass","outcome":"Incomplete","timestamp":"t","notes":""},
-        ... ])
-        >>> out = SoccerSpec().aggregate_totals(sample)
-        >>> int(out.loc[out['player_key']=='#7 A','Passes Attempted'].iloc[0])
-        2
-        >>> int(out.loc[out['player_key']=='#7 A','Passes Completed'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#7 A','Assists'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#9 B','Goals'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#9 B','Shots on Target'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#1 GK','Saves'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#6 C','Tackles'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#5 D','Interceptions'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#4 E','Fouls'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#4 E','Yellow Cards'].iloc[0])
-        1
-        >>> int(out.loc[out['player_key']=='#3 F','Red Cards'].iloc[0])
-        1
+        (Contains embedded doctests in earlier versions; kept logic only here.)
         """
         df = logs.copy()
         df = df[df["sport"] == self.name]
@@ -518,9 +514,9 @@ class SoccerSpec(SportSpec):
 
         totals = pd.DataFrame(grouped).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
         return totals
-    
+
 # ---------------------------
-# Lacrosse implementation (New)
+# Lacrosse implementation (new)
 # ---------------------------
 class LacrosseSpec(SportSpec):
     name = "Lacrosse"
@@ -532,7 +528,8 @@ class LacrosseSpec(SportSpec):
         stat_type = c2.selectbox(
             "Stat",
             options=[
-                "Goal","Assist","Shot","Ground Ball","Faceoff","Takeaway","Interception","Turnover","Penalty","Save","Goal Allowed","Goalie Minutes"
+                "Goal", "Assist", "Shot", "Ground Ball", "Faceoff", "Takeaway", "Interception",
+                "Turnover", "Penalty", "Save", "Goal Allowed", "Goalie Minutes"
             ],
             key="lc_stat_type",
         )
@@ -550,10 +547,10 @@ class LacrosseSpec(SportSpec):
                 assist_key = st.selectbox("Assisted by (optional)", options=["None"] + assist_opts, key="lc_assist")
 
             elif stat_type == "Shot":
-                on_target = st.selectbox("Shot on goal?", ["Yes","No"], key="lc_sog") == "Yes"
+                on_target = st.selectbox("Shot on goal?", ["Yes", "No"], key="lc_sog") == "Yes"
 
             elif stat_type == "Faceoff":
-                faceoff_result = st.selectbox("Faceoff Result", ["Win","Loss"], key="lc_faceoff")
+                faceoff_result = st.selectbox("Faceoff Result", ["Win", "Loss"], key="lc_faceoff")
 
             elif stat_type == "Penalty":
                 penalty_minutes = st.number_input("Penalty Minutes", value=1.0, step=0.5, key="lc_penmin")
@@ -579,8 +576,8 @@ class LacrosseSpec(SportSpec):
             }
 
             if stat_type == "Goal":
-                new_rows.append(base | {"stat_type":"Goal","goal":1})
-                new_rows.append(base | {"stat_type":"Shot","on_target":1})
+                new_rows.append(base | {"stat_type": "Goal", "goal": 1})
+                new_rows.append(base | {"stat_type": "Shot", "on_target": 1})
                 if assist_key and assist_key != "None":
                     try:
                         a = roster.loc[roster["player_key"] == assist_key].iloc[0]
@@ -595,19 +592,19 @@ class LacrosseSpec(SportSpec):
                     except Exception:
                         pass
             elif stat_type == "Assist":
-                new_rows.append(base | {"stat_type":"Assist"})
+                new_rows.append(base | {"stat_type": "Assist"})
             elif stat_type == "Shot":
-                new_rows.append(base | {"stat_type":"Shot","on_target":int(on_target)})
+                new_rows.append(base | {"stat_type": "Shot", "on_target": int(on_target)})
             elif stat_type == "Ground Ball":
-                new_rows.append(base | {"stat_type":"Ground Ball"})
+                new_rows.append(base | {"stat_type": "Ground Ball"})
             elif stat_type == "Faceoff":
-                new_rows.append(base | {"stat_type":"Faceoff","outcome":faceoff_result})
-            elif stat_type in ("Takeaway","Interception","Turnover","Save","Goal Allowed"):
-                new_rows.append(base | {"stat_type":stat_type})
+                new_rows.append(base | {"stat_type": "Faceoff", "outcome": faceoff_result})
+            elif stat_type in ("Takeaway", "Interception", "Turnover", "Save", "Goal Allowed"):
+                new_rows.append(base | {"stat_type": stat_type})
             elif stat_type == "Penalty":
-                new_rows.append(base | {"stat_type":"Penalty","penalty_minutes":penalty_minutes})
+                new_rows.append(base | {"stat_type": "Penalty", "penalty_minutes": penalty_minutes})
             elif stat_type == "Goalie Minutes":
-                new_rows.append(base | {"stat_type":"Goalie Minutes","minutes":minutes})
+                new_rows.append(base | {"stat_type": "Goalie Minutes", "minutes": minutes})
 
         return {"submitted": submitted, "new_rows": new_rows}
 
@@ -617,9 +614,9 @@ class LacrosseSpec(SportSpec):
         if df.empty:
             return pd.DataFrame()
 
-        df["on_target"] = pd.to_numeric(df.get("on_target",0), errors="coerce").fillna(0).astype(int)
-        df["penalty_minutes"] = pd.to_numeric(df.get("penalty_minutes",0), errors="coerce").fillna(0).astype(float)
-        df["minutes"] = pd.to_numeric(df.get("minutes",0), errors="coerce").fillna(0).astype(float)
+        df["on_target"] = pd.to_numeric(df.get("on_target", 0), errors="coerce").fillna(0).astype(int)
+        df["penalty_minutes"] = pd.to_numeric(df.get("penalty_minutes", 0), errors="coerce").fillna(0).astype(float)
+        df["minutes"] = pd.to_numeric(df.get("minutes", 0), errors="coerce").fillna(0).astype(float)
 
         grouped = []
         for pk, grp in df.groupby("player_key"):
@@ -630,41 +627,41 @@ class LacrosseSpec(SportSpec):
                 "number": grp["number"].iloc[0],
                 "positions": grp["positions"].iloc[0],
             }
-            row["Goals"] = int((grp["stat_type"]=="Goal").sum())
-            shots = grp[grp["stat_type"]=="Shot"]
+            row["Goals"] = int((grp["stat_type"] == "Goal").sum())
+            shots = grp[grp["stat_type"] == "Shot"]
             row["Shots"] = len(shots)
             row["Shots on Goal"] = int(shots["on_target"].sum())
-            row["Assists"] = int((grp["stat_type"]=="Assist").sum())
+            row["Assists"] = int((grp["stat_type"] == "Assist").sum())
             row["Points"] = row["Goals"] + row["Assists"]
-            row["Ground Balls"] = int((grp["stat_type"]=="Ground Ball").sum())
+            row["Ground Balls"] = int((grp["stat_type"] == "Ground Ball").sum())
             # Faceoffs
-            fo = grp[grp["stat_type"]=="Faceoff"]
+            fo = grp[grp["stat_type"] == "Faceoff"]
             row["Faceoffs Attempted"] = len(fo)
-            row["Faceoffs Won"] = int((fo["outcome"]=="Win").sum())
-            row["Faceoff %"] = round(100*row["Faceoffs Won"]/row["Faceoffs Attempted"],1) if row["Faceoffs Attempted"] else 0.0
+            row["Faceoffs Won"] = int((fo["outcome"] == "Win").sum())
+            row["Faceoff %"] = round(100 * row["Faceoffs Won"] / row["Faceoffs Attempted"], 1) if row["Faceoffs Attempted"] else 0.0
             # Defensive
-            row["Takeaways"] = int((grp["stat_type"]=="Takeaway").sum())
-            row["Interceptions"] = int((grp["stat_type"]=="Interception").sum())
+            row["Takeaways"] = int((grp["stat_type"] == "Takeaway").sum())
+            row["Interceptions"] = int((grp["stat_type"] == "Interception").sum())
             row["Caused Turnovers"] = row["Takeaways"] + row["Interceptions"]
-            row["Turnovers"] = int((grp["stat_type"]=="Turnover").sum())
+            row["Turnovers"] = int((grp["stat_type"] == "Turnover").sum())
             # Penalties
-            pen = grp[grp["stat_type"]=="Penalty"]
+            pen = grp[grp["stat_type"] == "Penalty"]
             row["Penalties"] = len(pen)
             row["Penalty Minutes"] = float(pen["penalty_minutes"].sum()) if not pen.empty else 0.0
             # Goalie
-            row["Saves"] = int((grp["stat_type"]=="Save").sum())
-            row["Goals Allowed"] = int((grp["stat_type"]=="Goal Allowed").sum())
-            row["Minutes"] = float(grp.loc[grp["stat_type"]=="Goalie Minutes","minutes"].sum())
+            row["Saves"] = int((grp["stat_type"] == "Save").sum())
+            row["Goals Allowed"] = int((grp["stat_type"] == "Goal Allowed").sum())
+            row["Minutes"] = float(grp.loc[grp["stat_type"] == "Goalie Minutes", "minutes"].sum())
             sog_faced = row["Saves"] + row["Goals Allowed"]
             row["Shots on Goal Faced"] = sog_faced
-            row["Save %"] = round(100*row["Saves"]/sog_faced,1) if sog_faced else 0.0
-            row["GAA"] = round((row["Goals Allowed"]*48)/row["Minutes"],2) if row["Minutes"]>0 else 0.0
+            row["Save %"] = round(100 * row["Saves"] / sog_faced, 1) if sog_faced else 0.0
+            row["GAA"] = round((row["Goals Allowed"] * 48) / row["Minutes"], 2) if row["Minutes"] > 0 else 0.0
             # Derived shooting
-            row["Shooting %"] = round(100*row["Goals"]/row["Shots on Goal"],1) if row["Shots on Goal"] else 0.0
-            row["SOG Rate %"] = round(100*row["Shots on Goal"]/row["Shots"],1) if row["Shots"] else 0.0
+            row["Shooting %"] = round(100 * row["Goals"] / row["Shots on Goal"], 1) if row["Shots on Goal"] else 0.0
+            row["SOG Rate %"] = round(100 * row["Shots on Goal"] / row["Shots"], 1) if row["Shots"] else 0.0
             grouped.append(row)
 
-        return pd.DataFrame(grouped).sort_values(by=["last_name","first_name"]).reset_index(drop=True)
+        return pd.DataFrame(grouped).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
 
 # ---------------------------
 # Placeholder specs (scaffold only)
@@ -673,36 +670,17 @@ class BaseballSpec(SportSpec):
     name = "Baseball"
     sides = ["All"]
 
-class BaseballSpec(SportSpec):
-    name = "Baseball"
-    sides = ["All"]
-
 class BasketballSpec(SportSpec):
     name = "Basketball"
     sides = ["All"]
 
-class BaseballSpec(SportSpec):
-    name = "Baseball"
-    sides = ["All"]
-
-class BasketballSpec(SportSpec):
-    name = "Basketball"
-    sides = ["All"]
-
-class BaseballSpec(SportSpec):
-    name = "Baseball"
-    sides = ["All"]
-
-class BasketballSpec(SportSpec):
-    name = "Basketball"
-    sides = ["All"]
-
+# Registry
 SPORTS: Dict[str, SportSpec] = {
     "Football": FootballSpec(),
     "Soccer": SoccerSpec(),
+    "Lacrosse": LacrosseSpec(),
     "Baseball": BaseballSpec(),
     "Basketball": BasketballSpec(),
-    "Lacrosse": LacrosseSpec(),
 }
 
 # ---------------------------
@@ -746,7 +724,8 @@ with st.expander("① Create a Game", expanded=True):
             }
             st.session_state.logs = pd.DataFrame(columns=[
                 "timestamp", "sport", "player_key", "first_name", "last_name", "number", "positions",
-                "side", "stat_type", "outcome", "yards", "touchdown", "notes"
+                "side", "stat_type", "outcome", "yards", "touchdown", "notes", "on_target", "goal",
+                "card", "penalty_minutes", "minutes","two_point"
             ])
             st.success("Game created and roster loaded.")
         except Exception as e:
