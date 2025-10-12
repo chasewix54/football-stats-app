@@ -236,8 +236,7 @@ def build_maxpreps_txt(df: pd.DataFrame, field_map: Dict[str, str], jersey_colum
 # ------------------ UI ------------------
 st.title("Export to MaxPreps (.txt)")
 st.markdown(
-    "Generates a MaxPreps import file with your hard-coded Stat Supplier ID. "
-    "Now supports multi-sport via a sport selector and configurable field lists."
+    "Generates a MaxPreps import file based on sport selection"
 )
 
 # --- Sport registry ---
