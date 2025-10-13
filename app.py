@@ -3,7 +3,7 @@ Multi-Sport Stats App (Streamlit + Google Sheets)
 ------------------------------------------------
 Scaffolded for multiple sports with a pluggable registry.
 
-Included sports: Football ✅, Soccer ✅, Lacrosse ✅, Baseball ⚠️, Basketball ⚠️.
+Included sports: Football ✅, Soccer ✅, Lacrosse ✅, Baseball ⚠️, Basketball ✅.
 
 Features
 - Create a game (sport + date + opponent + Google Sheet URL/ID)
@@ -32,15 +32,13 @@ from typing import Optional, Dict, Any, List
 
 import pandas as pd
 import streamlit as st
+import os
+RUNNING_TESTS = os.getenv("PYTEST_RUNNING") == "1"
+
 
 # Google Sheets (service account flow only)
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-
-# ---------------------------
-# Page config MUST be first Streamlit call
-# ---------------------------
-st.set_page_config(page_title="Multi-Sport Stats App", page_icon="🏅", layout="wide")
 
 # One-time flash (after rerun)
 if "flash_message" in st.session_state:
@@ -614,9 +612,23 @@ class LacrosseSpec(SportSpec):
         if df.empty:
             return pd.DataFrame()
 
-        df["on_target"] = pd.to_numeric(df.get("on_target", 0), errors="coerce").fillna(0).astype(int)
-        df["penalty_minutes"] = pd.to_numeric(df.get("penalty_minutes", 0), errors="coerce").fillna(0).astype(float)
-        df["minutes"] = pd.to_numeric(df.get("minutes", 0), errors="coerce").fillna(0).astype(float)
+        # robust numeric normalization using a Series default
+        idx = df.index
+        df["on_target"] = pd.to_numeric(
+            df["on_target"] if "on_target" in df else pd.Series(0, index=idx),
+            errors="coerce"
+        ).fillna(0).astype(int)
+
+        df["penalty_minutes"] = pd.to_numeric(
+            df["penalty_minutes"] if "penalty_minutes" in df else pd.Series(0.0, index=idx),
+            errors="coerce"
+        ).fillna(0).astype(float)
+
+        df["minutes"] = pd.to_numeric(
+            df["minutes"] if "minutes" in df else pd.Series(0.0, index=idx),
+            errors="coerce"
+        ).fillna(0).astype(float)
+
 
         grouped = []
         for pk, grp in df.groupby("player_key"):
@@ -664,14 +676,145 @@ class LacrosseSpec(SportSpec):
         return pd.DataFrame(grouped).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
 
 # ---------------------------
+# Basketball Implementation
+# ---------------------------
+
+class BasketballSpec(SportSpec):
+    name = "Basketball"
+    sides = ["All"]
+
+    def build_form(self, roster: pd.DataFrame) -> Dict[str, Any]:
+        c1, c2 = st.columns([2, 1])
+        player_key = c1.selectbox("Player", options=roster["player_key"].tolist(), key="bb_player_select")
+        stat_type = c2.selectbox(
+            "Stat",
+            options=[
+                "2PT Shot", "3PT Shot", "Free Throw",
+                "Rebound", "Assist", "Steal", "Block", "Turnover",
+            ],
+            key="bb_stat_type",
+        )
+
+        new_rows: List[dict] = []
+        with st.form("bb_log_form", clear_on_submit=True):
+            outcome = None
+
+            if stat_type in ("2PT Shot", "3PT Shot", "Free Throw"):
+                outcome = st.selectbox("Result", options=["Made", "Miss"], key="bb_shot_outcome")
+            elif stat_type == "Rebound":
+                outcome = st.selectbox("Type", options=["Offensive", "Defensive"], key="bb_reb_type")
+            # Assist / Steal / Block / Turnover: no extra fields
+
+            notes = st.text_input("Notes (optional)", key="bb_notes")
+            submitted = st.form_submit_button("Add Stat")
+
+        if submitted:
+            pr = roster.loc[roster["player_key"] == player_key].iloc[0]
+            row = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "sport": self.name,
+                "player_key": player_key,
+                "first_name": pr["first_name"],
+                "last_name": pr["last_name"],
+                "number": int(pr["number"]) if pd.notna(pr["number"]) else None,
+                "positions": pr["positions"],
+                "side": "All",
+                "stat_type": stat_type,
+                "outcome": outcome,
+                # columns we don't use for hoops stay present but empty
+                "yards": None,
+                "touchdown": 0,
+                "two_point": 0,
+                "on_target": None,
+                "goal": None,
+                "card": None,
+                "penalty_minutes": None,
+                "minutes": None,
+                "notes": notes.strip(),
+            }
+            new_rows.append(row)
+
+        return {"submitted": submitted, "new_rows": new_rows}
+
+    def aggregate_totals(self, logs: pd.DataFrame) -> pd.DataFrame:
+        df = logs.copy()
+        df = df[df["sport"] == self.name]
+        if df.empty:
+            return pd.DataFrame()
+
+        def _cnt(mask):
+            return int(mask.sum())
+
+        rows = []
+        for pk, grp in df.groupby("player_key"):
+            first = grp.iloc[0]
+            # Attempts / Makes
+            two_pa = _cnt(grp["stat_type"] == "2PT Shot")
+            two_pm = _cnt((grp["stat_type"] == "2PT Shot") & (grp["outcome"] == "Made"))
+            three_pa = _cnt(grp["stat_type"] == "3PT Shot")
+            three_pm = _cnt((grp["stat_type"] == "3PT Shot") & (grp["outcome"] == "Made"))
+            ft_a = _cnt(grp["stat_type"] == "Free Throw")
+            ft_m = _cnt((grp["stat_type"] == "Free Throw") & (grp["outcome"] == "Made"))
+
+            fga = two_pa + three_pa
+            fgm = two_pm + three_pm
+
+            pts = (2 * two_pm) + (3 * three_pm) + (1 * ft_m)
+
+            # Rebounds
+            oreb = _cnt((grp["stat_type"] == "Rebound") & (grp["outcome"] == "Offensive"))
+            dreb = _cnt((grp["stat_type"] == "Rebound") & (grp["outcome"] == "Defensive"))
+            reb = oreb + dreb
+
+            # Other counting stats
+            ast = _cnt(grp["stat_type"] == "Assist")
+            stl = _cnt(grp["stat_type"] == "Steal")
+            blk = _cnt(grp["stat_type"] == "Block")
+            tov = _cnt(grp["stat_type"] == "Turnover")
+
+            # Percentages (safe division)
+            fg_pct  = round(100.0 * fgm / fga, 1) if fga else 0.0
+            tp_pct  = round(100.0 * three_pm / three_pa, 1) if three_pa else 0.0
+            ft_pct  = round(100.0 * ft_m / ft_a, 1) if ft_a else 0.0
+
+            rows.append({
+                "player_key": pk,
+                "first_name": first["first_name"],
+                "last_name": first["last_name"],
+                "number": first["number"],
+                "positions": first["positions"],
+
+                "PTS": pts,
+
+                "FGM": fgm,
+                "FGA": fga,
+                "FG%": fg_pct,
+
+                "3PM": three_pm,
+                "3PA": three_pa,
+                "3P%": tp_pct,
+
+                "FTM": ft_m,
+                "FTA": ft_a,
+                "FT%": ft_pct,
+
+                "OREB": oreb,
+                "DREB": dreb,
+                "REB": reb,
+
+                "AST": ast,
+                "STL": stl,
+                "BLK": blk,
+                "TOV": tov,
+            })
+
+        return pd.DataFrame(rows).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
+
+# ---------------------------
 # Placeholder specs (scaffold only)
 # ---------------------------
 class BaseballSpec(SportSpec):
     name = "Baseball"
-    sides = ["All"]
-
-class BasketballSpec(SportSpec):
-    name = "Basketball"
     sides = ["All"]
 
 # Registry
@@ -683,189 +826,202 @@ SPORTS: Dict[str, SportSpec] = {
     "Basketball": BasketballSpec(),
 }
 
-# ---------------------------
-# Session state
-# ---------------------------
-if "game" not in st.session_state:
-    st.session_state.game = None
-if "roster" not in st.session_state:
-    st.session_state.roster = pd.DataFrame()
-if "logs" not in st.session_state:
-    st.session_state.logs = pd.DataFrame()
+def main():
+    st.set_page_config(
+        page_title="Multi-Sport Stats App",
+        page_icon="🏅",
+        layout="wide",
+    )
+    # ---------------------------
+    # Session state
+    # ---------------------------
+    if "game" not in st.session_state:
+        st.session_state.game = None
+    if "roster" not in st.session_state:
+        st.session_state.roster = pd.DataFrame()
+    if "logs" not in st.session_state:
+        st.session_state.logs = pd.DataFrame()
 
-# ---------------------------
-# Header
-# ---------------------------
-st.title("🏅 Multi-Sport Stats Collector → Google Sheets")
-st.caption("Create a game → pick a sport → log plays → save totals & log back to your Sheet.")
+    # ---------------------------
+    # Header
+    # ---------------------------
+    
+    st.title("🏅 Multi-Sport Stats Collector → Google Sheets")
+    st.markdown(
+    "Create a game → pick a sport → log plays → save totals & log back to your Sheet → export to  [Max Preps](https://www.maxpreps.com/)."
+    )
+    
+    # ---------------------------
+    # 1) Create a Game (paste an existing Google Sheet URL/ID)
+    # ---------------------------
+    with st.expander("① Create a Game", expanded=True):
+        c0, c1, c2, c3 = st.columns([1.2, 1, 2, 2])
+        sport_name = c0.selectbox("Sport", options=list(SPORTS.keys()), index=0, key="sport_selector")
+        game_date = c1.date_input("Game Date", value=datetime.today())
+        opponent = c2.text_input("Opponent", placeholder="E.g., Wildcats")
+        sheet_url = c3.text_input("Google Sheet URL or ID", key="sheet_url_input", placeholder="Paste the sheet URL or ID here…")
 
-# ---------------------------
-# 1) Create a Game (paste an existing Google Sheet URL/ID)
-# ---------------------------
-with st.expander("① Create a Game", expanded=True):
-    c0, c1, c2, c3 = st.columns([1.2, 1, 2, 2])
-    sport_name = c0.selectbox("Sport", options=list(SPORTS.keys()), index=0, key="sport_selector")
-    game_date = c1.date_input("Game Date", value=datetime.today())
-    opponent = c2.text_input("Opponent", placeholder="E.g., Wildcats")
-    sheet_url = c3.text_input("Google Sheet URL or ID", key="sheet_url_input", placeholder="Paste the sheet URL or ID here…")
+        create_btn = st.button("Create Game / Load Roster", type="primary")
 
-    create_btn = st.button("Create Game / Load Roster", type="primary")
-
-    if create_btn:
-        try:
-            sh = open_sheet(sheet_url)
-            roster_df = read_roster_df(sh)
-            st.session_state.roster = roster_df
-            st.session_state.game = {
-                "sport": sport_name,
-                "date": game_date.strftime("%Y-%m-%d"),
-                "opponent": opponent.strip(),
-                "sheet_id": parse_sheet_id_from_url(sheet_url),
-            }
-            st.session_state.logs = pd.DataFrame(columns=[
-                "timestamp", "sport", "player_key", "first_name", "last_name", "number", "positions",
-                "side", "stat_type", "outcome", "yards", "touchdown", "notes", "on_target", "goal",
-                "card", "penalty_minutes", "minutes","two_point"
-            ])
-            st.success("Game created and roster loaded.")
-        except Exception as e:
-            st.error(f"Failed to open sheet / read roster: {e}")
-
-# ---------------------------
-# Show current game/roster
-# ---------------------------
-if st.session_state.game:
-    g = st.session_state.game
-    st.info(f"**Game:** {g['date']} vs {g['opponent']} — **Sport:** {g['sport']}")
-    with st.expander("Roster (from Google Sheet)"):
-        st.dataframe(st.session_state.roster, use_container_width=True)
-
-    # CSV import
-    with st.expander("Import/Replace Roster (CSV → Google Sheet)", expanded=False):
-        st.write("Upload a CSV with headers exactly: **Player First Name, Player Last Name, Player Number, Player Position(s)**. We'll write it to the 'Roster' tab in your Google Sheet.")
-        template_df = SPORTS[g['sport']].csv_template()
-        st.download_button(
-            label="⬇️ Download Roster CSV Template",
-            data=template_df.to_csv(index=False).encode("utf-8"),
-            file_name=f"{g['sport'].lower()}_roster_template.csv",
-            mime="text/csv",
-        )
-        uploaded = st.file_uploader("Upload roster CSV", type=["csv"], accept_multiple_files=False)
-
-        def upsert_ws_with_df(sh, title: str, df: pd.DataFrame):
-            existing = {ws.title: ws for ws in sh.worksheets()}
-            if title in existing:
-                sh.del_worksheet(existing[title])
-                time.sleep(0.3)
-            ws = sh.add_worksheet(title=title, rows=str(len(df) + 10), cols=str(len(df.columns) + 5))
-            ws.update([df.columns.tolist()] + df.astype(str).values.tolist())
-
-        if uploaded is not None:
+        if create_btn:
             try:
-                new_roster = pd.read_csv(uploaded)
-                expected = [
-                    "Player First Name", "Player Last Name", "Player Number", "Player Position(s)"
-                ]
-                if any(col not in new_roster.columns for col in expected):
-                    st.error(f"CSV missing required columns. Expected exactly: {expected}")
-                else:
-                    new_roster["Player Number"] = pd.to_numeric(new_roster["Player Number"], errors="coerce").astype("Int64")
-                    st.dataframe(new_roster, use_container_width=True)
-                    if st.button("📤 Write to Google Sheet as 'Roster'", type="primary"):
-                        sh = open_sheet(g["sheet_id"])  # reopen
-                        upsert_ws_with_df(sh, "Roster", new_roster)
-                        st.session_state.roster = read_roster_df(sh)
-                        st.success("Roster sheet updated from CSV.")
+                sh = open_sheet(sheet_url)
+                roster_df = read_roster_df(sh)
+                st.session_state.roster = roster_df
+                st.session_state.game = {
+                    "sport": sport_name,
+                    "date": game_date.strftime("%Y-%m-%d"),
+                    "opponent": opponent.strip(),
+                    "sheet_id": parse_sheet_id_from_url(sheet_url),
+                }
+                st.session_state.logs = pd.DataFrame(columns=[
+                    "timestamp", "sport", "player_key", "first_name", "last_name", "number", "positions",
+                    "side", "stat_type", "outcome", "yards", "touchdown", "notes", "on_target", "goal",
+                    "card", "penalty_minutes", "minutes","two_point"
+                ])
+                st.success("Game created and roster loaded.")
             except Exception as e:
-                st.error(f"Failed to process CSV: {e}")
-
-# ---------------------------
-# 2) Log a Stat (delegated to SportSpec)
-# ---------------------------
-if not st.session_state.game:
-    st.warning("Create a game first.")
-else:
-    st.subheader("② Log a Stat")
-    roster = st.session_state.roster
-    if roster.empty:
-        st.warning("No roster loaded yet.")
-    else:
-        sport = st.session_state.game["sport"]
-        spec = SPORTS[sport]
-        result = spec.build_form(roster)
-        if result.get("submitted") and result.get("new_rows"):
-            # Append rows exactly once (no duplicates)
-            st.session_state.logs = pd.concat(
-                [st.session_state.logs, pd.DataFrame(result["new_rows"])],
-                ignore_index=True
-            )
-            if len(result["new_rows"]) == 2:
-                a, b = result["new_rows"][0], result["new_rows"][1]
-                st.session_state["flash_message"] = (
-                    f"✅ Added {a['stat_type']} for {a['first_name']} {a['last_name']} and "
-                    f"{b['stat_type']} for {b['first_name']} {b['last_name']}"
-                )
-            else:
-                a = result["new_rows"][0]
-                st.session_state["flash_message"] = f"✅ Added {a['stat_type']} for {a['first_name']} {a['last_name']}"
-            st.rerun()
-
-# ---------------------------
-# 3) Running Log & Totals
-# ---------------------------
-if not st.session_state.logs.empty:
-    st.subheader("③ Running Event Log")
-    st.dataframe(st.session_state.logs, use_container_width=True)
-
-    st.subheader("④ Player Totals (auto-calculated)")
-    sport = st.session_state.game["sport"] if st.session_state.game else "Football"
-    totals_df = SPORTS[sport].aggregate_totals(st.session_state.logs)
-    if totals_df is not None and not totals_df.empty:
-        st.dataframe(totals_df, use_container_width=True)
-    else:
-        st.info(f"Totals not yet implemented for {sport}.")
+                st.error(f"Failed to open sheet / read roster: {e}")
 
     # ---------------------------
-    # 4) Save back to Google Sheets
+    # Show current game/roster
     # ---------------------------
-    def save_to_google_sheets():
+    if st.session_state.game:
         g = st.session_state.game
-        sh = open_sheet(g["sheet_id"])  # re-open
-        stamp = f"{g['sport']} {g['date']} vs {g['opponent']}"
+        st.info(f"**Game:** {g['date']} vs {g['opponent']} — **Sport:** {g['sport']}")
+        with st.expander("Roster (from Google Sheet)"):
+            st.dataframe(st.session_state.roster, use_container_width=True)
 
-        totals_title = f"{stamp} (Totals)"
-        log_title = f"{stamp} (Log)"
+        # CSV import
+        with st.expander("Import/Replace Roster (CSV → Google Sheet)", expanded=False):
+            st.write("Upload a CSV with headers exactly: **Player First Name, Player Last Name, Player Number, Player Position(s)**. We'll write it to the 'Roster' tab in your Google Sheet.")
+            template_df = SPORTS[g['sport']].csv_template()
+            st.download_button(
+                label="⬇️ Download Roster CSV Template",
+                data=template_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{g['sport'].lower()}_roster_template.csv",
+                mime="text/csv",
+            )
+            uploaded = st.file_uploader("Upload roster CSV", type=["csv"], accept_multiple_files=False)
 
-        existing = {ws.title: ws for ws in sh.worksheets()}
-        for title in (totals_title, log_title):
-            if title in existing:
-                sh.del_worksheet(existing[title])
-                time.sleep(0.4)
+            def upsert_ws_with_df(sh, title: str, df: pd.DataFrame):
+                existing = {ws.title: ws for ws in sh.worksheets()}
+                if title in existing:
+                    sh.del_worksheet(existing[title])
+                    time.sleep(0.3)
+                ws = sh.add_worksheet(title=title, rows=str(len(df) + 10), cols=str(len(df.columns) + 5))
+                ws.update([df.columns.tolist()] + df.astype(str).values.tolist())
 
+            if uploaded is not None:
+                try:
+                    new_roster = pd.read_csv(uploaded)
+                    expected = [
+                        "Player First Name", "Player Last Name", "Player Number", "Player Position(s)"
+                    ]
+                    if any(col not in new_roster.columns for col in expected):
+                        st.error(f"CSV missing required columns. Expected exactly: {expected}")
+                    else:
+                        new_roster["Player Number"] = pd.to_numeric(new_roster["Player Number"], errors="coerce").astype("Int64")
+                        st.dataframe(new_roster, use_container_width=True)
+                        if st.button("📤 Write to Google Sheet as 'Roster'", type="primary"):
+                            sh = open_sheet(g["sheet_id"])  # reopen
+                            upsert_ws_with_df(sh, "Roster", new_roster)
+                            st.session_state.roster = read_roster_df(sh)
+                            st.success("Roster sheet updated from CSV.")
+                except Exception as e:
+                    st.error(f"Failed to process CSV: {e}")
+
+    # ---------------------------
+    # 2) Log a Stat (delegated to SportSpec)
+    # ---------------------------
+    if not st.session_state.game:
+        st.warning("Create a game first.")
+    else:
+        st.subheader("② Log a Stat")
+        roster = st.session_state.roster
+        if roster.empty:
+            st.warning("No roster loaded yet.")
+        else:
+            sport = st.session_state.game["sport"]
+            spec = SPORTS[sport]
+            result = spec.build_form(roster)
+            if result.get("submitted") and result.get("new_rows"):
+                # Append rows exactly once (no duplicates)
+                st.session_state.logs = pd.concat(
+                    [st.session_state.logs, pd.DataFrame(result["new_rows"])],
+                    ignore_index=True
+                )
+                if len(result["new_rows"]) == 2:
+                    a, b = result["new_rows"][0], result["new_rows"][1]
+                    st.session_state["flash_message"] = (
+                        f"✅ Added {a['stat_type']} for {a['first_name']} {a['last_name']} and "
+                        f"{b['stat_type']} for {b['first_name']} {b['last_name']}"
+                    )
+                else:
+                    a = result["new_rows"][0]
+                    st.session_state["flash_message"] = f"✅ Added {a['stat_type']} for {a['first_name']} {a['last_name']}"
+                st.rerun()
+
+    # ---------------------------
+    # 3) Running Log & Totals
+    # ---------------------------
+    if not st.session_state.logs.empty:
+        st.subheader("③ Running Event Log")
+        st.dataframe(st.session_state.logs, use_container_width=True)
+
+        st.subheader("④ Player Totals (auto-calculated)")
+        sport = st.session_state.game["sport"] if st.session_state.game else "Football"
+        totals_df = SPORTS[sport].aggregate_totals(st.session_state.logs)
         if totals_df is not None and not totals_df.empty:
-            ws_totals = sh.add_worksheet(title=totals_title, rows=str(len(totals_df) + 10), cols=str(len(totals_df.columns) + 5))
-            ws_totals.update([totals_df.columns.tolist()] + totals_df.astype(str).values.tolist())
+            st.dataframe(totals_df, use_container_width=True)
+        else:
+            st.info(f"Totals not yet implemented for {sport}.")
 
-        logs_df = st.session_state.logs.copy()
-        ws_log = sh.add_worksheet(title=log_title, rows=str(len(logs_df) + 10), cols=str(len(logs_df.columns) + 5))
-        ws_log.update([logs_df.columns.tolist()] + logs_df.astype(str).values.tolist())
+        # ---------------------------
+        # 4) Save back to Google Sheets
+        # ---------------------------
+        def save_to_google_sheets():
+            g = st.session_state.game
+            sh = open_sheet(g["sheet_id"])  # re-open
+            stamp = f"{g['sport']} {g['date']} vs {g['opponent']}"
 
-    csave1, _ = st.columns([1, 6])
-    if csave1.button("💾 Save to Google Sheet", type="primary"):
-        try:
-            save_to_google_sheets()
-            st.success("Saved game totals and log to your Google Sheet (two new tabs).")
-        except Exception as e:
-            st.error(f"Save failed: {e}")
+            totals_title = f"{stamp} (Totals)"
+            log_title = f"{stamp} (Log)"
 
-# ---------------------------
-# Footer / Tips
-# ---------------------------
-st.divider()
-st.caption(
-    "Tips:\n"
-    "1. Create your Google Sheet and share it with the service account email (As Editor)\n"
-    "   Service Account - sheets-writer@football-stats-470918.iam.gserviceaccount.com\n"
-    "2. Your first tab needs to be your team roster. It needs to be structured with these column Headers exactly: |Player First Name|Player Last Name|Player Number|Player Position(s)\n"
-    "3. Example Google Sheet Setup - https://docs.google.com/spreadsheets/d/1_8dDjSdueDYt-WkKf-NptLskl7BJWeIX7K61nHB171A/edit?usp=sharing\n\n"
-)
+            existing = {ws.title: ws for ws in sh.worksheets()}
+            for title in (totals_title, log_title):
+                if title in existing:
+                    sh.del_worksheet(existing[title])
+                    time.sleep(0.4)
+
+            if totals_df is not None and not totals_df.empty:
+                ws_totals = sh.add_worksheet(title=totals_title, rows=str(len(totals_df) + 10), cols=str(len(totals_df.columns) + 5))
+                ws_totals.update([totals_df.columns.tolist()] + totals_df.astype(str).values.tolist())
+
+            logs_df = st.session_state.logs.copy()
+            ws_log = sh.add_worksheet(title=log_title, rows=str(len(logs_df) + 10), cols=str(len(logs_df.columns) + 5))
+            ws_log.update([logs_df.columns.tolist()] + logs_df.astype(str).values.tolist())
+
+        csave1, _ = st.columns([1, 6])
+        if csave1.button("💾 Save to Google Sheet", type="primary"):
+            try:
+                save_to_google_sheets()
+                st.success("Saved game totals and log to your Google Sheet (two new tabs).")
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+    # ---------------------------
+    # Footer / Tips
+    # ---------------------------
+    st.divider()
+    st.caption(
+        "Tips:\n"
+        "1. Create your Google Sheet and share it with the service account email (As Editor)\n"
+        "   Service Account - sheets-writer@football-stats-470918.iam.gserviceaccount.com\n"
+        "2. Your first tab needs to be your team roster. It needs to be structured with these column Headers exactly: |Player First Name|Player Last Name|Player Number|Player Position(s)\n"
+        "3. Example Google Sheet Setup - https://docs.google.com/spreadsheets/d/1_8dDjSdueDYt-WkKf-NptLskl7BJWeIX7K61nHB171A/edit?usp=sharing\n\n"
+    )
+if not RUNNING_TESTS:
+    main()
+    
+    
