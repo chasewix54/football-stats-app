@@ -811,11 +811,185 @@ class BasketballSpec(SportSpec):
         return pd.DataFrame(rows).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
 
 # ---------------------------
-# Placeholder specs (scaffold only)
+# Baseball Implementation
 # ---------------------------
+
 class BaseballSpec(SportSpec):
     name = "Baseball"
     sides = ["All"]
+
+    def build_form(self, roster: pd.DataFrame) -> Dict[str, Any]:
+        c1, c2 = st.columns([2, 1])
+        player_key = c1.selectbox("Player", options=roster["player_key"].tolist(), key="bsb_player_select")
+        category = c2.selectbox(
+            "Category",
+            options=["Batting/Running", "Pitching", "Fielding"],
+            key="bsb_category",
+        )
+
+        new_rows: List[dict] = []
+        with st.form("bsb_log_form", clear_on_submit=True):
+            stat_type = None
+            outcome = None
+            qty: Optional[int | float] = None  # we’ll store numeric quantities in 'yards' column for simplicity
+
+            if category == "Batting/Running":
+                stat_type = st.selectbox(
+                    "Stat",
+                    options=[
+                        "Plate Appearance",  # outcome-driven → updates AB/H/HR/BB/SO
+                        "Run",
+                        "RBI",
+                        "Stolen Base",
+                    ],
+                    key="bsb_bat_stat",
+                )
+                if stat_type == "Plate Appearance":
+                    outcome = st.selectbox(
+                        "Result",
+                        options=["Single", "Double", "Triple", "Home Run", "Out", "Walk", "Strikeout"],
+                        key="bsb_pa_outcome",
+                    )
+
+            elif category == "Pitching":
+                stat_type = st.selectbox(
+                    "Stat",
+                    options=[
+                        "Outs Recorded (+)",      # amount (outs)
+                        "Earned Runs (+)",        # amount
+                        "Strikeouts (Pitching +)",# amount
+                        "Walks Allowed (+)",      # amount
+                        "Hits Allowed (+)",       # amount
+                        "Home Runs Allowed (+)",  # amount
+                        "Pitch Count (+)",        # amount
+                        "Win", "Loss", "Save"
+                    ],
+                    key="bsb_pitch_stat",
+                )
+                if stat_type.endswith("(+)"):
+                    # generic numeric adder
+                    qty = st.number_input("Amount", value=1, min_value=0, step=1, key="bsb_pitch_qty")
+
+            elif category == "Fielding":
+                stat_type = st.selectbox(
+                    "Stat",
+                    options=["Putout", "Assist", "Error"],
+                    key="bsb_field_stat",
+                )
+
+            notes = st.text_input("Notes (optional)", key="bsb_notes")
+            submitted = st.form_submit_button("Add Stat")
+
+        if submitted:
+            pr = roster.loc[roster["player_key"] == player_key].iloc[0]
+            row = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "sport": self.name,
+                "player_key": player_key,
+                "first_name": pr["first_name"],
+                "last_name": pr["last_name"],
+                "number": int(pr["number"]) if pd.notna(pr["number"]) else None,
+                "positions": pr["positions"],
+                "side": "All",
+                "stat_type": stat_type,
+                "outcome": outcome,        # PA outcome or rebound/pitching type
+                "yards": qty,              # numeric quantity for pitching adders (outs, ER, K, BB, H, HR allowed, PC)
+                "touchdown": 0,
+                "two_point": 0,
+                "on_target": None,
+                "goal": None,
+                "card": None,
+                "penalty_minutes": None,
+                "minutes": None,
+                "notes": notes.strip(),
+            }
+            new_rows.append(row)
+
+        return {"submitted": submitted, "new_rows": new_rows}
+
+    def aggregate_totals(self, logs: pd.DataFrame) -> pd.DataFrame:
+        df = logs.copy()
+        df = df[df["sport"] == self.name]
+        if df.empty:
+            return pd.DataFrame()
+
+        # helper
+        def _sum_qty(g: pd.DataFrame, stat: str) -> int:
+            s = g.loc[g["stat_type"] == stat, "yards"]
+            # yards may be None/NaN
+            return int(pd.to_numeric(s, errors="coerce").fillna(0).sum())
+
+        rows = []
+        for pk, grp in df.groupby("player_key"):
+            first = grp.iloc[0]
+
+            # ---------------- Batting ----------------
+            pa = grp[grp["stat_type"] == "Plate Appearance"]
+            singles = (pa["outcome"] == "Single").sum()
+            doubles = (pa["outcome"] == "Double").sum()
+            triples = (pa["outcome"] == "Triple").sum()
+            homers = (pa["outcome"] == "Home Run").sum()
+            outs_pa = (pa["outcome"] == "Out").sum()
+            walks = (pa["outcome"] == "Walk").sum()
+            strikeouts_bat = (pa["outcome"] == "Strikeout").sum()
+
+            hits = int(singles + doubles + triples + homers)
+            ab = int(singles + doubles + triples + homers + outs_pa + strikeouts_bat)  # walk not an AB
+            tb = int(singles + 2*doubles + 3*triples + 4*homers)
+
+            runs = int((grp["stat_type"] == "Run").sum())
+            rbi  = int((grp["stat_type"] == "RBI").sum())
+            sb   = int((grp["stat_type"] == "Stolen Base").sum())
+
+            avg = round(hits / ab, 3) if ab else 0.000
+            obp_den = ab + walks
+            obp = round((hits + walks) / obp_den, 3) if obp_den else 0.000
+            slg = round(tb / ab, 3) if ab else 0.000
+
+            # ---------------- Pitching ----------------
+            outs = _sum_qty(grp, "Outs Recorded (+)")
+            ip = outs / 3.0
+            er = _sum_qty(grp, "Earned Runs (+)")
+            k_pitch = _sum_qty(grp, "Strikeouts (Pitching +)")
+            bb_pitch = _sum_qty(grp, "Walks Allowed (+)")
+            h_allowed = _sum_qty(grp, "Hits Allowed (+)")
+            hr_allowed = _sum_qty(grp, "Home Runs Allowed (+)")
+            pc = _sum_qty(grp, "Pitch Count (+)")
+            w = int((grp["stat_type"] == "Win").sum())
+            l = int((grp["stat_type"] == "Loss").sum())
+            sv = int((grp["stat_type"] == "Save").sum())
+            era = round((er * 9.0) / ip, 2) if ip > 0 else 0.00
+
+            # ---------------- Fielding ----------------
+            po = int((grp["stat_type"] == "Putout").sum())
+            a  = int((grp["stat_type"] == "Assist").sum())
+            e  = int((grp["stat_type"] == "Error").sum())
+            fpct_den = po + a + e
+            fpct = round((po + a) / fpct_den, 3) if fpct_den else 0.000
+
+            rows.append({
+                "player_key": pk,
+                "first_name": first["first_name"],
+                "last_name": first["last_name"],
+                "number": first["number"],
+                "positions": first["positions"],
+
+                # Batting
+                "AB": ab, "H": hits, "R": runs, "RBI": rbi, "HR": int(homers),
+                "SB": sb, "BB": int(walks), "SO": int(strikeouts_bat),
+                "AVG": avg, "OBP": obp, "SLG": slg,
+
+                # Pitching
+                "IP": round(ip, 2), "ER": er, "K": k_pitch, "BB (P)": bb_pitch,
+                "H (P)": h_allowed, "HR (P)": hr_allowed, "W": w, "L": l, "SV": sv,
+                "ERA": era, "PC": pc,
+
+                # Fielding
+                "PO": po, "A": a, "E": e, "FPCT": fpct,
+            })
+
+        return pd.DataFrame(rows).sort_values(by=["last_name", "first_name"]).reset_index(drop=True)
+
 
 # Registry
 SPORTS: Dict[str, SportSpec] = {
