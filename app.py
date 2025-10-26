@@ -33,7 +33,14 @@ from typing import Optional, Dict, Any, List
 import pandas as pd
 import streamlit as st
 import os
+
 RUNNING_TESTS = os.getenv("PYTEST_RUNNING") == "1"
+def main():
+    st.set_page_config(
+        page_title="Multi-Sport Stats App",
+        page_icon="🏅",
+        layout="wide",
+    )
 
 
 # Google Sheets (service account flow only)
@@ -1000,35 +1007,29 @@ SPORTS: Dict[str, SportSpec] = {
     "Basketball": BasketballSpec(),
 }
 
-def main():
-    st.set_page_config(
-        page_title="Multi-Sport Stats App",
-        page_icon="🏅",
-        layout="wide",
-    )
     # ---------------------------
     # Session state
     # ---------------------------
-    if "game" not in st.session_state:
+if "game" not in st.session_state:
         st.session_state.game = None
-    if "roster" not in st.session_state:
+if "roster" not in st.session_state:
         st.session_state.roster = pd.DataFrame()
-    if "logs" not in st.session_state:
+if "logs" not in st.session_state:
         st.session_state.logs = pd.DataFrame()
 
     # ---------------------------
     # Header
     # ---------------------------
     
-    st.title("🏅 Multi-Sport Stats Collector → Google Sheets")
-    st.markdown(
+st.title("🏅 Multi-Sport Stats Collector → Google Sheets")
+st.markdown(
     "Create a game → pick a sport → log plays → save totals & log back to your Sheet → export to  [Max Preps](https://www.maxpreps.com/)."
     )
     
     # ---------------------------
     # 1) Create a Game (paste an existing Google Sheet URL/ID)
     # ---------------------------
-    with st.expander("① Create a Game", expanded=True):
+with st.expander("① Create a Game", expanded=True):
         c0, c1, c2, c3 = st.columns([1.2, 1, 2, 2])
         sport_name = c0.selectbox("Sport", options=list(SPORTS.keys()), index=0, key="sport_selector")
         game_date = c1.date_input("Game Date", value=datetime.today())
@@ -1060,7 +1061,7 @@ def main():
     # ---------------------------
     # Show current game/roster
     # ---------------------------
-    if st.session_state.game:
+if st.session_state.game:
         g = st.session_state.game
         st.info(f"**Game:** {g['date']} vs {g['opponent']} — **Sport:** {g['sport']}")
         with st.expander("Roster (from Google Sheet)"):
@@ -1108,9 +1109,9 @@ def main():
     # ---------------------------
     # 2) Log a Stat (delegated to SportSpec)
     # ---------------------------
-    if not st.session_state.game:
+if not st.session_state.game:
         st.warning("Create a game first.")
-    else:
+else:
         st.subheader("② Log a Stat")
         roster = st.session_state.roster
         if roster.empty:
@@ -1139,7 +1140,7 @@ def main():
     # ---------------------------
     # 3) Running Log & Totals
     # ---------------------------
-    if not st.session_state.logs.empty:
+if not st.session_state.logs.empty:
         st.subheader("③ Running Event Log")
         st.dataframe(st.session_state.logs, use_container_width=True)
 
@@ -1187,8 +1188,8 @@ def main():
     # ---------------------------
     # Footer / Tips
     # ---------------------------
-    st.divider()
-    st.caption(
+st.divider()
+st.caption(
         "Tips:\n"
         "1. Create your Google Sheet and share it with the service account email (As Editor)\n"
         "   Service Account - sheets-writer@football-stats-470918.iam.gserviceaccount.com\n"
