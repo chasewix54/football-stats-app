@@ -34,15 +34,22 @@ import pandas as pd
 import streamlit as st
 import os
 
+
+
+st.set_page_config(
+    page_title="Multi-Sport Stats App",
+    page_icon="🏅",
+    layout="wide",
+)
 RUNNING_TESTS = os.getenv("PYTEST_RUNNING") == "1"
 def main():
-    st.set_page_config(
-        page_title="Multi-Sport Stats App",
-        page_icon="🏅",
-        layout="wide",
-    )
+    
 
 
+    # Main app logic starts here
+    # One-time flash (after rerun)
+    if "flash_message" in st.session_state:
+        st.success(st.session_state.pop("flash_message"))
 # Google Sheets (service account flow only)
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
