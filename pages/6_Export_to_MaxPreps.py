@@ -42,93 +42,44 @@ MAXPREPS_FIELDS: List[str] = [
 DEFAULT_FIELD_MAP: Dict[str, str] = {
     # Roster
     "Jersey": "Jersey",
-    "number": "Jersey",  # common header in your totals
+    "number": "Jersey",
+
     # Offensive – Rushing
-    "Rush Att": "RushingNum",
-    "Rush Yds": "RushingYards",
-    "Rush Long": "RushingLong",
+    "Rush Attempts": "RushingNum",
+    "Rushing Yards": "RushingYards",
+    "Rushing TDs": "RushingTDNum",
+
     # Offensive – Receiving
-    "Rec": "ReceivingNum",
-    "Rec Yds": "ReceivingYards",
-    "Rec Long": "ReceivingLong",
+    "Receptions": "ReceivingNum",
+    "Receiving Yards": "ReceivingYards",
+    "Receiving TDs": "ReceivingTDNum",
+
     # Offensive – Passing
-    "Pass Cmp": "PassingComp",
-    "Pass Att": "PassingAtt",
-    "Pass Int": "PassingInt",
-    "Pass Yds": "PassingYards",
-    "Pass TD": "PassingTD",
-    "Pass Long": "PassingLong",
+    "Pass Completions": "PassingComp",
+    "Pass Attempts": "PassingAtt",
+    "Pass Yards": "PassingYards",
+    "Passing TDs": "PassingTD",
+
     # Offensive – Fumbles
-    "Off Fum": "OffensiveFumbles",
-    "Off Fum Lost": "OffensiveFumblesLost",
-    # O-Line
-    "Pancakes": "PancakeBlocks",
-    # Defensive – Tackles
-    "Solo Tkl": "Tackles",
-    "Ast Tkl": "Assists",
-    "Tot Tkl": "TotalTackles",
-    "TFL": "TacklesForLoss",
-    # Sacks
+    "Fumbles": "OffensiveFumbles",
+
+    # Defensive
+    "Tackles": "TotalTackles",
     "Sacks": "Sacks",
-    "Sack Yds Lost": "SacksYardsLost",
-    "QB Hurries": "QBHurries",
-    # Pass Defense
-    "INT": "INTs",
-    "INT Yds": "INTYards",
-    "Pass Def": "PassesDefensed",
-    # Blocks
-    "Blk Punt": "BlockedPunts",
-    "Blk FG": "BlockedFG",
-    # Fumbles
-    "Fum Rec": "FumbleRecoveries",
-    "FR Yds": "FumbleRecoveryYards",
-    "FF": "CausedFumbles",
-    # Punt Returns
-    "PR": "PuntReturnNum",
-    "PR Yds": "PuntReturnYards",
-    "PR Long": "PuntReturnLong",
-    "PR FC": "PuntReturnFairCatches",
-    # Kickoff Returns
-    "KR": "KickoffReturnNum",
-    "KR Yds": "KickoffReturnYards",
-    "KR Long": "KickoffReturnLong",
-    # Total Returns
-    "Total Return Yds": "TotalReturnYards",
-    # Punts
+    "Interceptions": "INTs",
+    "Forced Fumbles": "CausedFumbles",
+
+    # Punting
     "Punts": "PuntNum",
-    "Punt Yds": "PuntYards",
-    "Punt Long": "PuntLong",
-    "Punt Inside 20": "PuntInside20",
-    # Kickoffs
-    "Kickoffs": "KickoffNum",
-    "KO Yds": "KickoffYards",
-    "KO Long": "KickoffLong",
-    "KO TB": "KickoffTouchbacks",
-    # Scoring
-    "TD": "Touchdowns",
-    "Rush TD": "RushingTDNum",
-    "Rec TD": "ReceivingTDNum",
-    "Fum Ret TD": "FumbleReturnedTDNum",
-    "INT Ret TD": "IntReturnedTDNum",
-    "Punt Ret TD": "PuntReturnedTDNum",
-    "KO Ret TD": "KickoffReturnedTDNum",
-    "Total TD": "TotalTDNum",
-    # PAT Kicks
+    "Punt Yards": "PuntYards",
+
+    # PAT Kicking
     "PAT Made": "PATKickingMade",
-    "PAT Att": "PATKickingAtt",
-    "PAT Pts": "PATKickingPoints",
-    # Conversions
-    "PAT Rush": "PATRushingNum",
-    "PAT Rec": "PATReceivingNum",
-    "Conv Pts": "TotalConversionPoints",
+    "PAT Attempts": "PATKickingAtt",
+
     # Field Goals
     "FG Made": "FGMade",
-    "FG Att": "FGAttempted",
-    "FG Long": "FGLong",
-    # Safeties
-    "Safeties": "Safeties",
-    # Points
-    "Pts": "TotalPoints",
+    "FG Attempts": "FGAttempted",
 }
 
 # ------------------ Helpers ------------------
@@ -604,17 +555,64 @@ with st.expander("Developer tools", expanded=False):
     if st.button("Run internal test"):
         def _test_build_maxpreps_txt():
             sample = pd.DataFrame([
-                {"Jersey": "12", "Rush Att": 5, "Rush Yds": 42},
-                {"Jersey": "10", "Rush Att": 3, "Rush Yds": 12},
+                {
+                    "number": 12,
+                    "Rush Attempts": 5,
+                    "Rushing Yards": 42,
+                    "Rushing TDs": 1,
+                    "Receptions": 3,
+                    "Receiving Yards": 28,
+                    "Pass Attempts": 0,
+                    "Pass Completions": 0,
+                    "Pass Yards": 0,
+                    "Passing TDs": 0,
+                    "Tackles": 2,
+                    "Sacks": 0,
+                },
+                {
+                    "number": 10,
+                    "Rush Attempts": 3,
+                    "Rushing Yards": 12,
+                    "Rushing TDs": 0,
+                    "Receptions": 0,
+                    "Receiving Yards": 0,
+                    "Pass Attempts": 8,
+                    "Pass Completions": 5,
+                    "Pass Yards": 67,
+                    "Passing TDs": 1,
+                    "Tackles": 0,
+                    "Sacks": 0,
+                },
             ])
-            txt = build_maxpreps_txt(sample, DEFAULT_FIELD_MAP)
+
+            txt = build_maxpreps_txt(
+                sample,
+                DEFAULT_FIELD_MAP,
+                jersey_column_name="number"
+            )
+
             lines = txt.strip().splitlines()
+
             assert lines[0] == "669ae75f-4563-494a-8c17-370aaa8539d4"
+
             header = lines[1].split("|")
+
             assert header[0] == "Jersey"
-            assert "RushingNum" in header and "RushingYards" in header
+            assert "RushingNum" in header
+            assert "RushingYards" in header
+            assert "RushingTDNum" in header
+            assert "ReceivingNum" in header
+            assert "ReceivingYards" in header
+            assert "PassingComp" in header
+            assert "PassingAtt" in header
+            assert "PassingYards" in header
+            assert "PassingTD" in header
+            assert "TotalTackles" in header
+
             assert lines[2].startswith("12|")
+            assert lines[3].startswith("10|")
+
             return True
+
         _test_build_maxpreps_txt()
         st.success("Internal unit test passed.")
-
