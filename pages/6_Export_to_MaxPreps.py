@@ -57,6 +57,7 @@ DEFAULT_FIELD_MAP: Dict[str, str] = {
     # Offensive – Passing
     "Pass Completions": "PassingComp",
     "Pass Attempts": "PassingAtt",
+    "Passing Interceptions": "PassingInt",
     "Pass Yards": "PassingYards",
     "Passing TDs": "PassingTD",
 
@@ -67,7 +68,23 @@ DEFAULT_FIELD_MAP: Dict[str, str] = {
     "Tackles": "TotalTackles",
     "Sacks": "Sacks",
     "Interceptions": "INTs",
+    "Interception Return Yards": "INTYards",
+    "Interception Return TDs": "IntReturnedTDNum",
     "Forced Fumbles": "CausedFumbles",
+    "Fumble Recoveries": "FumbleRecoveries",
+    "Fumble Recovery Yards": "FumbleRecoveryYards",
+    "Fumble Return TDs": "FumbleReturnedTDNum",
+
+    # Punt Returns
+    "Punt Returns": "PuntReturnNum",
+    "Punt Return Yards": "PuntReturnYards",
+    "Punt Return TDs": "PuntReturnedTDNum",
+
+    # Kickoff Returns
+    "Kickoff Returns": "KickoffReturnNum",
+    "Kickoff Return Yards": "KickoffReturnYards",
+    "Kickoff Return TDs": "KickoffReturnedTDNum",
+    "Total Return Yards": "TotalReturnYards",
 
     # Punting
     "Punts": "PuntNum",
@@ -76,6 +93,11 @@ DEFAULT_FIELD_MAP: Dict[str, str] = {
     # PAT Kicking
     "PAT Made": "PATKickingMade",
     "PAT Attempts": "PATKickingAtt",
+
+    # Two-point conversions
+    "2-pt Rushing Conversions": "PATRushingNum",
+    "2-pt Receiving Conversions": "PATReceivingNum",
+    "2-pt Conversion Points": "TotalConversionPoints",
 
     # Field Goals
     "FG Made": "FGMade",
@@ -562,12 +584,31 @@ with st.expander("Developer tools", expanded=False):
                     "Rushing TDs": 1,
                     "Receptions": 3,
                     "Receiving Yards": 28,
-                    "Pass Attempts": 0,
-                    "Pass Completions": 0,
-                    "Pass Yards": 0,
-                    "Passing TDs": 0,
+                    "Receiving TDs": 0,
+                    "Pass Attempts": 8,
+                    "Pass Completions": 5,
+                    "Passing Interceptions": 1,
+                    "Pass Yards": 67,
+                    "Passing TDs": 1,
                     "Tackles": 2,
                     "Sacks": 0,
+                    "Interceptions": 1,
+                    "Interception Return Yards": 15,
+                    "Interception Return TDs": 1,
+                    "Forced Fumbles": 1,
+                    "Fumble Recoveries": 1,
+                    "Fumble Recovery Yards": 4,
+                    "Fumble Return TDs": 0,
+                    "Punt Returns": 2,
+                    "Punt Return Yards": 22,
+                    "Punt Return TDs": 0,
+                    "Kickoff Returns": 1,
+                    "Kickoff Return Yards": 30,
+                    "Kickoff Return TDs": 0,
+                    "Total Return Yards": 71,
+                    "2-pt Rushing Conversions": 1,
+                    "2-pt Receiving Conversions": 0,
+                    "2-pt Conversion Points": 2,
                 },
                 {
                     "number": 10,
@@ -576,12 +617,31 @@ with st.expander("Developer tools", expanded=False):
                     "Rushing TDs": 0,
                     "Receptions": 0,
                     "Receiving Yards": 0,
-                    "Pass Attempts": 8,
-                    "Pass Completions": 5,
-                    "Pass Yards": 67,
-                    "Passing TDs": 1,
+                    "Receiving TDs": 0,
+                    "Pass Attempts": 0,
+                    "Pass Completions": 0,
+                    "Passing Interceptions": 0,
+                    "Pass Yards": 0,
+                    "Passing TDs": 0,
                     "Tackles": 0,
                     "Sacks": 0,
+                    "Interceptions": 0,
+                    "Interception Return Yards": 0,
+                    "Interception Return TDs": 0,
+                    "Forced Fumbles": 0,
+                    "Fumble Recoveries": 0,
+                    "Fumble Recovery Yards": 0,
+                    "Fumble Return TDs": 0,
+                    "Punt Returns": 0,
+                    "Punt Return Yards": 0,
+                    "Punt Return TDs": 0,
+                    "Kickoff Returns": 0,
+                    "Kickoff Return Yards": 0,
+                    "Kickoff Return TDs": 0,
+                    "Total Return Yards": 0,
+                    "2-pt Rushing Conversions": 0,
+                    "2-pt Receiving Conversions": 0,
+                    "2-pt Conversion Points": 0,
                 },
             ])
 
@@ -605,9 +665,23 @@ with st.expander("Developer tools", expanded=False):
             assert "ReceivingYards" in header
             assert "PassingComp" in header
             assert "PassingAtt" in header
+            assert "PassingInt" in header
             assert "PassingYards" in header
             assert "PassingTD" in header
             assert "TotalTackles" in header
+            assert "INTs" in header
+            assert "INTYards" in header
+            assert "IntReturnedTDNum" in header
+            assert "FumbleRecoveries" in header
+            assert "FumbleRecoveryYards" in header
+            assert "PuntReturnNum" in header
+            assert "PuntReturnYards" in header
+            assert "KickoffReturnNum" in header
+            assert "KickoffReturnYards" in header
+            assert "TotalReturnYards" in header
+            assert "PATRushingNum" in header
+            assert "PATReceivingNum" in header
+            assert "TotalConversionPoints" in header
 
             assert lines[2].startswith("12|")
             assert lines[3].startswith("10|")
