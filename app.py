@@ -175,7 +175,11 @@ class FootballSpec(SportSpec):
                         two_point_val = 1 if tp_flag else 0
 
                 elif stat_type == "Pass":
-                    outcome = st.selectbox("Pass Outcome", options=["Complete", "Incomplete"], key="fb_pass_outcome")
+                    outcome = st.selectbox(
+                        "Pass Outcome",
+                        options=["Complete", "Incomplete", "Interception"],
+                        key="fb_pass_outcome"
+                    )
                     receiver_key = None
                     if outcome == "Complete":
                         yards = st.number_input("Pass Yards (if complete)", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
@@ -210,29 +214,37 @@ class FootballSpec(SportSpec):
                 # Fumble: no yards/TD/2pt
 
             else:
-                # Defense
+                # Defense / return stats
                 stat_type = c3.selectbox(
                     "Defensive Stat",
-                    options=["Forced Fumble", "Sack", "Interception", "Tackle", "Return"],
+                    options=[
+                        "Forced Fumble", "Fumble Recovery", "Sack", "Interception", "Tackle",
+                        "Punt Return", "Kickoff Return"
+                    ],
                     key="fb_stat_def"
                 )
 
-                if stat_type == "Return":
-                    yards = st.number_input("Return Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
+                if stat_type == "Interception":
+                    yards = st.number_input("Interception Return Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
                     td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
-                                          help="Set to 1 if this return scored a TD.")
-                    tp_flag = st.checkbox("2-pt Conversion", value=False, key="fb_2pt",
-                                          help="Check if this return was a successful 2-point conversion.")
+                                          help="Check if the interception was returned for a TD.")
                     touchdown_val = 1 if td_flag else 0
-                    two_point_val = 1 if tp_flag else 0
-                elif stat_type == "Interception":
+                elif stat_type == "Fumble Recovery":
+                    yards = st.number_input("Fumble Recovery Return Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
                     td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
-                                          help="Set to 1 if this interception was returned for a TD.")
-                    tp_flag = st.checkbox("2-pt Conversion", value=False, key="fb_2pt",
-                                          help="Check if this play was a successful 2-point conversion.")
+                                          help="Check if the fumble recovery was returned for a TD.")
                     touchdown_val = 1 if td_flag else 0
-                    two_point_val = 1 if tp_flag else 0
-                # Forced Fumble, Sack, Tackle: no yards/TD/2pt prompt
+                elif stat_type == "Punt Return":
+                    yards = st.number_input("Punt Return Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
+                    td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
+                                          help="Check if the punt return scored a TD.")
+                    touchdown_val = 1 if td_flag else 0
+                elif stat_type == "Kickoff Return":
+                    yards = st.number_input("Kickoff Return Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
+                    td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
+                                          help="Check if the kickoff return scored a TD.")
+                    touchdown_val = 1 if td_flag else 0
+                # Forced Fumble, Sack, Tackle: no yards/TD prompt
 
             notes = st.text_input("Notes (optional)", key="fb_notes")
             submitted = st.form_submit_button("Add Stat")
@@ -318,6 +330,7 @@ class FootballSpec(SportSpec):
             pass_df = grp[grp["stat_type"] == "Pass"]
             row["Pass Attempts"] = int(len(pass_df))
             row["Pass Completions"] = int((pass_df["outcome"] == "Complete").sum())
+            row["Passing Interceptions"] = int((pass_df["outcome"] == "Interception").sum())
             row["Pass Yards"] = int(pass_df.loc[pass_df["outcome"] == "Complete", "yards"].sum())
             row["Passing TDs"] = int(((pass_df["outcome"] == "Complete") & (pass_df["touchdown"] == 1)).sum())
 
@@ -332,16 +345,63 @@ class FootballSpec(SportSpec):
             row["PAT Attempts"] = int(len(pat_df))
             row["PAT Made"] = int((pat_df["outcome"] == "Made").sum())
 
-            # Defense
+            # Defense / returns
             row["Forced Fumbles"] = int((grp["stat_type"] == "Forced Fumble").sum())
             row["Sacks"] = int((grp["stat_type"] == "Sack").sum())
-            row["Interceptions"] = int((grp["stat_type"] == "Interception").sum())
             row["Tackles"] = int((grp["stat_type"] == "Tackle").sum())
-            row["Return Yards"] = int(grp.loc[grp["stat_type"] == "Return", "yards"].sum())
-            row["Defensive TDs"] = int(((grp["stat_type"].isin(["Interception", "Return"])) & (grp["touchdown"] == 1)).sum())
 
-            # Two-point conversions (any play types where we allowed it)
-            row["2-pt Conversions"] = int(grp.loc[grp["two_point"] == 1].shape[0])
+            interception_df = grp[grp["stat_type"] == "Interception"]
+            row["Interceptions"] = int(len(interception_df))
+            row["Interception Return Yards"] = int(interception_df["yards"].sum())
+            row["Interception Return TDs"] = int((interception_df["touchdown"] == 1).sum())
+
+            fumble_recovery_df = grp[grp["stat_type"] == "Fumble Recovery"]
+            row["Fumble Recoveries"] = int(len(fumble_recovery_df))
+            row["Fumble Recovery Yards"] = int(fumble_recovery_df["yards"].sum())
+            row["Fumble Return TDs"] = int((fumble_recovery_df["touchdown"] == 1).sum())
+
+            punt_return_df = grp[grp["stat_type"] == "Punt Return"]
+            row["Punt Returns"] = int(len(punt_return_df))
+            row["Punt Return Yards"] = int(punt_return_df["yards"].sum())
+            row["Punt Return TDs"] = int((punt_return_df["touchdown"] == 1).sum())
+
+            kickoff_return_df = grp[grp["stat_type"] == "Kickoff Return"]
+            row["Kickoff Returns"] = int(len(kickoff_return_df))
+            row["Kickoff Return Yards"] = int(kickoff_return_df["yards"].sum())
+            row["Kickoff Return TDs"] = int((kickoff_return_df["touchdown"] == 1).sum())
+
+            # Preserve legacy generic Return entries from older games.
+            legacy_return_df = grp[grp["stat_type"] == "Return"]
+            legacy_return_yards = int(legacy_return_df["yards"].sum())
+            legacy_return_tds = int((legacy_return_df["touchdown"] == 1).sum())
+
+            row["Total Return Yards"] = int(
+                row["Interception Return Yards"]
+                + row["Fumble Recovery Yards"]
+                + row["Punt Return Yards"]
+                + row["Kickoff Return Yards"]
+                + legacy_return_yards
+            )
+            row["Return Yards"] = row["Total Return Yards"]  # backward-compatible display column
+            row["Defensive TDs"] = int(
+                row["Interception Return TDs"]
+                + row["Fumble Return TDs"]
+                + row["Punt Return TDs"]
+                + row["Kickoff Return TDs"]
+                + legacy_return_tds
+            )
+
+            # Two-point conversions: only the runner/receiver gets MaxPreps conversion credit.
+            row["2-pt Rushing Conversions"] = int(
+                ((grp["stat_type"] == "Run") & (grp["two_point"] == 1)).sum()
+            )
+            row["2-pt Receiving Conversions"] = int(
+                ((grp["stat_type"] == "Reception") & (grp["two_point"] == 1)).sum()
+            )
+            row["2-pt Conversions"] = int(
+                row["2-pt Rushing Conversions"] + row["2-pt Receiving Conversions"]
+            )
+            row["2-pt Conversion Points"] = int(2 * row["2-pt Conversions"])
 
             # Total TDs
             row["Touchdowns (Total)"] = int(row["Receiving TDs"] + row["Rushing TDs"] + row["Passing TDs"] + row["Defensive TDs"])
