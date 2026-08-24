@@ -10,6 +10,7 @@ Google Sheet mode supports:
 - Exporting one .txt per game (multiple games are packaged in a .zip)
 - Building combined season totals for reconciliation/reference
 - Friendly game labels while preserving the underlying worksheet names
+- Source-vs-export jersey reconciliation before every download
 
 Also supports CSV/Excel uploads and editable field mappings.
 """
@@ -19,7 +20,7 @@ import io
 import re
 import zipfile
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -48,31 +49,20 @@ MAXPREPS_FIELDS: List[str] = [
 
 # ------------------ Default football mapping ------------------
 DEFAULT_FIELD_MAP: Dict[str, str] = {
-    # Roster
     "Jersey": "Jersey",
     "number": "Jersey",
-
-    # Offensive – Rushing
     "Rush Attempts": "RushingNum",
     "Rushing Yards": "RushingYards",
     "Rushing TDs": "RushingTDNum",
-
-    # Offensive – Receiving
     "Receptions": "ReceivingNum",
     "Receiving Yards": "ReceivingYards",
     "Receiving TDs": "ReceivingTDNum",
-
-    # Offensive – Passing
     "Pass Completions": "PassingComp",
     "Pass Attempts": "PassingAtt",
     "Passing Interceptions": "PassingInt",
     "Pass Yards": "PassingYards",
     "Passing TDs": "PassingTD",
-
-    # Offensive – Fumbles
     "Fumbles": "OffensiveFumbles",
-
-    # Defensive
     "Tackles": "TotalTackles",
     "Sacks": "Sacks",
     "Interceptions": "INTs",
@@ -82,38 +72,25 @@ DEFAULT_FIELD_MAP: Dict[str, str] = {
     "Fumble Recoveries": "FumbleRecoveries",
     "Fumble Recovery Yards": "FumbleRecoveryYards",
     "Fumble Return TDs": "FumbleReturnedTDNum",
-
-    # Punt Returns
     "Punt Returns": "PuntReturnNum",
     "Punt Return Yards": "PuntReturnYards",
     "Punt Return TDs": "PuntReturnedTDNum",
-
-    # Kickoff Returns
     "Kickoff Returns": "KickoffReturnNum",
     "Kickoff Return Yards": "KickoffReturnYards",
     "Kickoff Return TDs": "KickoffReturnedTDNum",
     "Total Return Yards": "TotalReturnYards",
-
-    # Punting
     "Punts": "PuntNum",
     "Punt Yards": "PuntYards",
-
-    # PAT Kicking
     "PAT Made": "PATKickingMade",
     "PAT Attempts": "PATKickingAtt",
-
-    # Two-point conversions
     "2-pt Rushing Conversions": "PATRushingNum",
     "2-pt Receiving Conversions": "PATReceivingNum",
     "2-pt Conversion Points": "TotalConversionPoints",
-
-    # Field Goals
     "FG Made": "FGMade",
     "FG Attempts": "FGAttempted",
 }
 
 # ------------------ Helpers ------------------
-
 def sanitize_filename(name: str) -> str:
     name = re.sub(r"[\"'()]", "", name).strip()
     if not name.lower().endswith(".txt"):
@@ -146,8 +123,21 @@ def coerce_str_no_nan(x) -> str:
         return str(x)
 
 
+def normalize_jersey(value) -> str:
+    """Normalize jersey values so 7, 7.0 and ' 7 ' compare as the same player."""
+    raw = coerce_str_no_nan(value)
+    if not raw:
+        return ""
+    try:
+        numeric = float(raw)
+        if numeric.is_integer():
+            return str(int(numeric))
+    except Exception:
+        pass
+    return raw.strip()
+
+
 def resolve_column_name_case_insensitive(df: pd.DataFrame, name: str) -> str:
-    """Return the actual DataFrame column whose lowercase matches name.lower()."""
     target = name.strip().lower()
     for c in df.columns:
         if str(c).strip().lower() == target:
@@ -180,6 +170,83 @@ def resolve_jersey_column(df: pd.DataFrame, preferred: str) -> str:
     raise ValueError(
         f"Missing required jersey column: '{preferred}'. Available columns: {list(df.columns)}"
     )
+
+
+def jersey_sort_key(value: str) -> Tuple[int, float | str]:
+    try:
+        return 0, float(value)
+    except Exception:
+        return 1, value.lower()
+
+
+def source_jerseys(df: pd.DataFrame, jersey_column_name: str) -> Set[str]:
+    jersey_col = resolve_jersey_column(df, jersey_column_name)
+    return {
+        jersey
+        for jersey in (normalize_jersey(value) for value in df[jersey_col].tolist())
+        if jersey
+    }
+
+
+def duplicate_source_jerseys(df: pd.DataFrame, jersey_column_name: str) -> List[str]:
+    jersey_col = resolve_jersey_column(df, jersey_column_name)
+    values = [normalize_jersey(value) for value in df[jersey_col].tolist()]
+    values = [value for value in values if value]
+    counts = pd.Series(values, dtype="object").value_counts()
+    return sorted(counts[counts > 1].index.tolist(), key=jersey_sort_key)
+
+
+def exported_jerseys(txt: str) -> Set[str]:
+    lines = txt.splitlines()
+    if len(lines) < 3:
+        return set()
+    jerseys: Set[str] = set()
+    for line in lines[2:]:
+        if not line.strip():
+            continue
+        jersey = normalize_jersey(line.split("|", 1)[0])
+        if jersey:
+            jerseys.add(jersey)
+    return jerseys
+
+
+def reconcile_jerseys(df: pd.DataFrame, txt: str, jersey_column_name: str) -> Dict[str, object]:
+    source = source_jerseys(df, jersey_column_name)
+    exported = exported_jerseys(txt)
+    missing = sorted(source - exported, key=jersey_sort_key)
+    unexpected = sorted(exported - source, key=jersey_sort_key)
+    duplicates = duplicate_source_jerseys(df, jersey_column_name)
+    return {
+        "source_count": len(source),
+        "export_count": len(exported),
+        "missing": missing,
+        "unexpected": unexpected,
+        "duplicates": duplicates,
+        "ok": not missing and not unexpected and not duplicates,
+    }
+
+
+def render_reconciliation(label: str, result: Dict[str, object]) -> bool:
+    source_count = int(result["source_count"])
+    export_count = int(result["export_count"])
+    missing = list(result["missing"])
+    unexpected = list(result["unexpected"])
+    duplicates = list(result["duplicates"])
+    ok = bool(result["ok"])
+
+    if ok:
+        st.success(f"✅ {label}: {source_count} source players → {export_count} exported players. All jerseys matched.")
+        return True
+
+    st.error(f"🚫 {label}: jersey reconciliation failed. Download is blocked until the mismatch is resolved.")
+    if missing:
+        st.error("Missing from MaxPreps export: " + ", ".join(f"#{j}" for j in missing))
+    if unexpected:
+        st.error("Unexpected jerseys in MaxPreps export: " + ", ".join(f"#{j}" for j in unexpected))
+    if duplicates:
+        st.error("Duplicate jersey rows in source totals: " + ", ".join(f"#{j}" for j in duplicates))
+    st.caption(f"Source players: {source_count} | Exported players: {export_count}")
+    return False
 
 
 GAME_TOTALS_RE = re.compile(
@@ -279,7 +346,7 @@ def build_maxpreps_txt(
     lines: List[str] = [SUPPLIER_ID, "|".join(header_fields)]
 
     for _, row in df.iterrows():
-        jersey_val = coerce_str_no_nan(row[jersey_column_resolved])
+        jersey_val = normalize_jersey(row[jersey_column_resolved])
         if jersey_val == "":
             continue
         values: List[str] = [jersey_val]
@@ -287,8 +354,8 @@ def build_maxpreps_txt(
             sheet_col = reverse_map.get(mp_field)
             val = coerce_str_no_nan(row[sheet_col]) if sheet_col else ""
             values.append(val)
-        if any(v != "" for v in values[1:]):
-            lines.append("|".join(values))
+        # Always carry every source jersey into the file. Reconciliation below verifies this.
+        lines.append("|".join(values))
 
     return "\n".join(lines) + "\n"
 
@@ -312,7 +379,7 @@ def build_maxpreps_txt_for_sport(
     lines: List[str] = [SUPPLIER_ID, "|".join(header_fields)]
 
     for _, row in df.iterrows():
-        jersey_val = coerce_str_no_nan(row[jersey_col_resolved])
+        jersey_val = normalize_jersey(row[jersey_col_resolved])
         if jersey_val == "":
             continue
         values: List[str] = [jersey_val]
@@ -320,8 +387,8 @@ def build_maxpreps_txt_for_sport(
             sheet_col = reverse_map.get(mp_field)
             val = coerce_str_no_nan(row[sheet_col]) if sheet_col else ""
             values.append(val)
-        if any(v != "" for v in values[1:]):
-            lines.append("|".join(values))
+        # Do not silently drop a player just because all currently mapped stats are blank.
+        lines.append("|".join(values))
 
     return "\n".join(lines) + "\n"
 
@@ -351,7 +418,7 @@ def combine_game_totals(
                 resolved_stats[sheet_col] = actual
 
         for _, row in df.iterrows():
-            jersey = coerce_str_no_nan(row[jersey_actual])
+            jersey = normalize_jersey(row[jersey_actual])
             if not jersey:
                 continue
             bucket = accumulated.setdefault(jersey, {jersey_column_name: jersey})
@@ -402,7 +469,7 @@ def list_google_sheet_titles(sheet_url: str) -> List[str]:
     return [ws.title for ws in sh.worksheets()]
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=10, show_spinner=False)
 def load_google_game_frames(sheet_url: str, worksheet_names: tuple[str, ...]) -> Dict[str, pd.DataFrame]:
     if gspread is None:
         return {}
@@ -472,7 +539,6 @@ SPORT_FIELDS: Dict[str, List[str]] = {
     "Lacrosse": [],
 }
 
-# Default per-sport sheet->MaxPreps mapping
 DEFAULT_FIELD_MAP_BY_SPORT: Dict[str, Dict[str, str]] = {
     "Football": DEFAULT_FIELD_MAP,
     "Baseball": {
@@ -595,6 +661,11 @@ if source_choice == "Google Sheet":
     )
 
     if sheet_url and gspread is not None:
+        if st.button("↻ Refresh data from Google Sheet"):
+            list_google_sheet_titles.clear()
+            load_google_game_frames.clear()
+            st.rerun()
+
         try:
             titles = list_google_sheet_titles(sheet_url)
             game_tabs = sorted(
@@ -631,9 +702,7 @@ if source_choice == "Google Sheet":
                     if nonempty_frames:
                         uploaded_df = pd.concat(nonempty_frames, ignore_index=True, sort=False)
                     total_rows = sum(len(df) for df in game_frames.values())
-                    st.success(
-                        f"Loaded {len(game_frames)} game(s) with {total_rows} player-total rows."
-                    )
+                    st.success(f"Loaded {len(game_frames)} game(s) with {total_rows} player-total rows.")
 
                     with st.expander("Selected games", expanded=False):
                         for title in selected_game_tabs:
@@ -758,52 +827,60 @@ if submitted:
             if source_choice == "Google Sheet" and game_frames:
                 if len(game_frames) > 1 and export_mode == "Individual game files":
                     generated_files: Dict[str, str] = {}
+                    reconciliation_rows: List[Dict[str, object]] = []
+                    all_valid = True
+
                     for title, df in game_frames.items():
-                        txt = build_maxpreps_txt_for_sport(
-                            df,
-                            edited_map,
-                            jersey_col,
-                            declared_fields,
+                        txt = build_maxpreps_txt_for_sport(df, edited_map, jersey_col, declared_fields)
+                        filename = game_export_filename(title, sport)
+                        generated_files[filename] = txt
+                        result = reconcile_jerseys(df, txt, jersey_col)
+                        all_valid = render_reconciliation(format_game_tab_label(title), result) and all_valid
+                        reconciliation_rows.append({
+                            "Game": format_game_tab_label(title),
+                            "Source Players": result["source_count"],
+                            "Exported Players": result["export_count"],
+                            "Missing": ", ".join(result["missing"]) if result["missing"] else "—",
+                            "Status": "OK" if result["ok"] else "BLOCKED",
+                        })
+
+                    with st.expander("Jersey reconciliation summary", expanded=True):
+                        st.dataframe(pd.DataFrame(reconciliation_rows), use_container_width=True, hide_index=True)
+
+                    if all_valid:
+                        zip_bytes = make_zip(generated_files)
+                        zip_name = sanitize_zip_filename(default_filename)
+                        st.success(f"Generated {len(generated_files)} validated MaxPreps game files.")
+                        st.download_button(
+                            "Download all game files (.zip)",
+                            data=zip_bytes,
+                            file_name=zip_name,
+                            mime="application/zip",
                         )
-                        generated_files[game_export_filename(title, sport)] = txt
 
-                    zip_bytes = make_zip(generated_files)
-                    zip_name = sanitize_zip_filename(default_filename)
-                    st.success(f"Generated {len(generated_files)} MaxPreps game files.")
-                    st.download_button(
-                        "Download all game files (.zip)",
-                        data=zip_bytes,
-                        file_name=zip_name,
-                        mime="application/zip",
-                    )
+                        with st.expander("Files included"):
+                            for filename in generated_files:
+                                st.write(f"• {filename}")
 
-                    with st.expander("Files included"):
-                        for filename in generated_files:
-                            st.write(f"• {filename}")
-
-                    first_filename = next(iter(generated_files))
-                    with st.expander(f"Preview: {first_filename} (first 25 lines)"):
-                        preview = "\n".join(generated_files[first_filename].splitlines()[:25])
-                        st.code(preview, language="text")
+                        first_filename = next(iter(generated_files))
+                        with st.expander(f"Preview: {first_filename} (first 25 lines)"):
+                            st.code("\n".join(generated_files[first_filename].splitlines()[:25]), language="text")
 
                 elif len(game_frames) > 1 and export_mode.startswith("Combined"):
                     combined_df = combine_game_totals(game_frames, edited_map, jersey_col)
-                    txt = build_maxpreps_txt_for_sport(
-                        combined_df,
-                        edited_map,
-                        jersey_col,
-                        declared_fields,
-                    )
-                    fname = sanitize_filename(default_filename)
-                    st.success(
-                        f"Combined {len(game_frames)} games into one season-total reconciliation file."
-                    )
-                    st.download_button(
-                        "Download combined season totals .txt",
-                        data=txt.encode("utf-8"),
-                        file_name=fname,
-                        mime="text/plain",
-                    )
+                    txt = build_maxpreps_txt_for_sport(combined_df, edited_map, jersey_col, declared_fields)
+                    result = reconcile_jerseys(combined_df, txt, jersey_col)
+                    valid = render_reconciliation("Combined season totals", result)
+
+                    if valid:
+                        fname = sanitize_filename(default_filename)
+                        st.success(f"Combined {len(game_frames)} games into one validated season-total reconciliation file.")
+                        st.download_button(
+                            "Download combined season totals .txt",
+                            data=txt.encode("utf-8"),
+                            file_name=fname,
+                            mime="text/plain",
+                        )
                     with st.expander("Combined totals preview", expanded=False):
                         st.dataframe(combined_df, use_container_width=True)
                     with st.expander("MaxPreps file preview (first 25 lines)"):
@@ -811,37 +888,35 @@ if submitted:
 
                 else:
                     title, df = next(iter(game_frames.items()))
-                    txt = build_maxpreps_txt_for_sport(
-                        df,
-                        edited_map,
-                        jersey_col,
-                        declared_fields,
-                    )
+                    txt = build_maxpreps_txt_for_sport(df, edited_map, jersey_col, declared_fields)
+                    result = reconcile_jerseys(df, txt, jersey_col)
+                    valid = render_reconciliation(format_game_tab_label(title), result)
+
+                    if valid:
+                        fname = sanitize_filename(default_filename)
+                        st.success(f"MaxPreps {sport} file generated and validated for {format_game_tab_label(title)}.")
+                        st.download_button(
+                            "Download .txt",
+                            data=txt.encode("utf-8"),
+                            file_name=fname,
+                            mime="text/plain",
+                        )
+                    with st.expander("Preview (first 25 lines)"):
+                        st.code("\n".join(txt.splitlines()[:25]), language="text")
+            else:
+                txt = build_maxpreps_txt_for_sport(uploaded_df, edited_map, jersey_col, declared_fields)
+                result = reconcile_jerseys(uploaded_df, txt, jersey_col)
+                valid = render_reconciliation("Uploaded totals file", result)
+
+                if valid:
                     fname = sanitize_filename(default_filename)
-                    st.success(f"MaxPreps {sport} file generated for {format_game_tab_label(title)}.")
+                    st.success(f"MaxPreps {sport} import file generated and validated.")
                     st.download_button(
                         "Download .txt",
                         data=txt.encode("utf-8"),
                         file_name=fname,
                         mime="text/plain",
                     )
-                    with st.expander("Preview (first 25 lines)"):
-                        st.code("\n".join(txt.splitlines()[:25]), language="text")
-            else:
-                txt = build_maxpreps_txt_for_sport(
-                    uploaded_df,
-                    edited_map,
-                    jersey_col,
-                    declared_fields,
-                )
-                fname = sanitize_filename(default_filename)
-                st.success(f"MaxPreps {sport} import file generated.")
-                st.download_button(
-                    "Download .txt",
-                    data=txt.encode("utf-8"),
-                    file_name=fname,
-                    mime="text/plain",
-                )
                 with st.expander("Preview (first 25 lines)"):
                     st.code("\n".join(txt.splitlines()[:25]), language="text")
         except Exception as e:
@@ -918,6 +993,10 @@ with st.expander("Developer tools", expanded=False):
                     "2-pt Receiving Conversions": 0,
                     "2-pt Conversion Points": 0,
                 },
+                {
+                    # Regression guard: a source jersey must never disappear even if every mapped stat is blank.
+                    "number": 7,
+                },
             ])
 
             txt = build_maxpreps_txt(sample, DEFAULT_FIELD_MAP, jersey_column_name="number")
@@ -952,8 +1031,14 @@ with st.expander("Developer tools", expanded=False):
             assert "TotalConversionPoints" in header
             assert lines[2].startswith("12|")
             assert lines[3].startswith("10|")
+            assert lines[4].startswith("7|")
 
-            # Multi-game helper checks
+            reconciliation = reconcile_jerseys(sample, txt, "number")
+            assert reconciliation["ok"] is True
+            assert reconciliation["source_count"] == 3
+            assert reconciliation["export_count"] == 3
+            assert reconciliation["missing"] == []
+
             assert format_game_tab_label("Football 2026-08-21 vs Agoura (Totals)") == "Aug 21, 2026 — Agoura"
 
             game_one = pd.DataFrame([
