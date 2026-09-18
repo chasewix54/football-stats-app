@@ -747,6 +747,12 @@ st.divider()
 columns_available: List[str] = list(uploaded_df.columns) if uploaded_df is not None else []
 jersey_guess: Optional[str] = guess_jersey_column(columns_available) if columns_available else None
 
+customize_mapping = st.toggle(
+    "Customize MaxPreps field mapping",
+    value=False,
+    help="Leave this off for the standard football export. Turn it on only when you need to change the sheet-to-MaxPreps mapping.",
+)
+
 # --- Export form ---
 with st.form("export_form"):
     st.subheader("Export Settings")
@@ -777,17 +783,23 @@ with st.form("export_form"):
     )
     SPORT_FIELDS[sport] = [f.strip() for f in field_list_text.splitlines() if f.strip()]
 
-    st.markdown("**Field Mapping** – map your sheet columns to MaxPreps fields.")
     default_map_rows = (
         [{"Sheet Column": k, "MaxPreps Field": v} for k, v in CURRENT_DEFAULT_MAP.items()]
         if CURRENT_DEFAULT_MAP else [{"Sheet Column": "Jersey", "MaxPreps Field": "Jersey"}]
     )
-    mapping_editor = st.data_editor(
-        pd.DataFrame(default_map_rows),
-        num_rows="dynamic",
-        use_container_width=True,
-        key="mapping_editor",
-    )
+
+    if customize_mapping:
+        st.markdown("**Field Mapping** – map your sheet columns to MaxPreps fields.")
+        mapping_editor = st.data_editor(
+            pd.DataFrame(default_map_rows),
+            num_rows="dynamic",
+            width="stretch",
+            hide_index=True,
+            key="mapping_editor",
+        )
+    else:
+        mapping_editor = pd.DataFrame(default_map_rows)
+        st.caption("Using the standard MaxPreps field mapping.")
 
     if source_choice == "Google Sheet" and selected_game_tabs:
         if len(selected_game_tabs) == 1:
@@ -845,7 +857,7 @@ if submitted:
                         })
 
                     with st.expander("Jersey reconciliation summary", expanded=True):
-                        st.dataframe(pd.DataFrame(reconciliation_rows), use_container_width=True, hide_index=True)
+                        st.dataframe(pd.DataFrame(reconciliation_rows), width="stretch", hide_index=True)
 
                     if all_valid:
                         zip_bytes = make_zip(generated_files)
@@ -882,7 +894,7 @@ if submitted:
                             mime="text/plain",
                         )
                     with st.expander("Combined totals preview", expanded=False):
-                        st.dataframe(combined_df, use_container_width=True)
+                        st.dataframe(combined_df, width="stretch")
                     with st.expander("MaxPreps file preview (first 25 lines)"):
                         st.code("\n".join(txt.splitlines()[:25]), language="text")
 
