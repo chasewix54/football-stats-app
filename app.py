@@ -31,7 +31,7 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
@@ -76,6 +76,27 @@ LOG_COLUMNS = [
 ]
 
 TRANSIENT_GOOGLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+# PR #7 introduced automatic Sack -> TFL/Tackle aggregation at this commit time.
+# Historical app timestamps were written as naive server timestamps; Streamlit-hosted
+# production runs in UTC, so naive values are interpreted as UTC for this one-time
+# compatibility migration.
+SACK_AUTO_TFL_RELEASE_UTC = datetime(2026, 9, 19, 17, 41, 25, tzinfo=timezone.utc)
+
+
+def event_uses_automatic_sack_tfl(timestamp_value) -> bool:
+    text = str(timestamp_value or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed >= SACK_AUTO_TFL_RELEASE_UTC
+    except (TypeError, ValueError):
+        return False
 
 
 def get_gspread_client():
@@ -234,6 +255,35 @@ def ensure_game_log_worksheet(sh, game: Dict[str, Any]):
                 lambda: ws.update(
                     existing_ids,
                     range_name=f"{event_col}2:{event_col}{end_row}",
+                )
+            )
+
+        # PR #7 briefly logged automatic Sack -> TFL behavior before the durable marker
+        # existed. Backfill only those unmarked Sack rows at/after that release. Truly
+        # legacy rows remain blank/0 so historical Sack + explicit TFL pairs are preserved.
+        timestamp_index = headers.index("timestamp")
+        stat_type_index = headers.index("stat_type")
+        sack_marker_index = headers.index("sack_counts_as_tfl")
+        sack_marker_values = []
+        needs_sack_marker_update = False
+        for row in data_rows:
+            marker = row[sack_marker_index].strip() if len(row) > sack_marker_index else ""
+            stat_type = row[stat_type_index].strip() if len(row) > stat_type_index else ""
+            timestamp_value = row[timestamp_index].strip() if len(row) > timestamp_index else ""
+
+            if not marker and stat_type == "Sack" and event_uses_automatic_sack_tfl(timestamp_value):
+                marker = "1"
+                needs_sack_marker_update = True
+
+            sack_marker_values.append([marker])
+
+        if needs_sack_marker_update:
+            marker_col = column_letter(sack_marker_index + 1)
+            end_row = len(sack_marker_values) + 1
+            google_retry(
+                lambda: ws.update(
+                    sack_marker_values,
+                    range_name=f"{marker_col}2:{marker_col}{end_row}",
                 )
             )
 
