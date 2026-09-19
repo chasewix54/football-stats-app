@@ -64,6 +64,7 @@ DEFAULT_FIELD_MAP: Dict[str, str] = {
     "Passing TDs": "PassingTD",
     "Fumbles": "OffensiveFumbles",
     "Tackles": "TotalTackles",
+    "Tackles For Loss": "TacklesForLoss",
     "Sacks": "Sacks",
     "Interceptions": "INTs",
     "Interception Return Yards": "INTYards",
@@ -953,6 +954,7 @@ with st.expander("Developer tools", expanded=False):
                     "Pass Yards": 67,
                     "Passing TDs": 1,
                     "Tackles": 2,
+                    "Tackles For Loss": 1,
                     "Sacks": 0,
                     "Interceptions": 1,
                     "Interception Return Yards": 15,
@@ -1028,6 +1030,7 @@ with st.expander("Developer tools", expanded=False):
             assert "PassingYards" in header
             assert "PassingTD" in header
             assert "TotalTackles" in header
+            assert "TacklesForLoss" in header
             assert "INTs" in header
             assert "INTYards" in header
             assert "IntReturnedTDNum" in header
