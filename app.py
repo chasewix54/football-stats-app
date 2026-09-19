@@ -424,7 +424,9 @@ class FootballSpec(SportSpec):
                     key="fb_stat_def"
                 )
 
-                if stat_type == "Interception":
+                if stat_type == "Sack":
+                    st.caption("A sack automatically counts as both a tackle and a tackle for loss. Do not log a separate TFL for the same play.")
+                elif stat_type == "Interception":
                     yards = st.number_input("Interception Return Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
                     td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
                                           help="Check if the interception was returned for a TD.")
@@ -540,9 +542,14 @@ class FootballSpec(SportSpec):
 
             row["Forced Fumbles"] = int((grp["stat_type"] == "Forced Fumble").sum())
             row["Sacks"] = int((grp["stat_type"] == "Sack").sum())
-            row["Tackles For Loss"] = int((grp["stat_type"] == "Tackle For Loss").sum())
-            # A TFL is also a tackle, so include it in TotalTackles while tracking TFL separately.
-            row["Tackles"] = int((grp["stat_type"] == "Tackle").sum()) + row["Tackles For Loss"]
+            explicit_tfls = int((grp["stat_type"] == "Tackle For Loss").sum())
+            # Every sack is also a tackle for loss and a tackle.
+            row["Tackles For Loss"] = explicit_tfls + row["Sacks"]
+            row["Tackles"] = (
+                int((grp["stat_type"] == "Tackle").sum())
+                + explicit_tfls
+                + row["Sacks"]
+            )
 
             interception_df = grp[grp["stat_type"] == "Interception"]
             row["Interceptions"] = int(len(interception_df))
