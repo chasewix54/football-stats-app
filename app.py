@@ -72,7 +72,7 @@ SCOPE = [
 LOG_COLUMNS = [
     "event_id", "timestamp", "sport", "player_key", "first_name", "last_name", "number", "positions",
     "side", "stat_type", "outcome", "yards", "touchdown", "notes", "on_target", "goal",
-    "card", "penalty_minutes", "minutes", "two_point",
+    "card", "penalty_minutes", "minutes", "two_point", "sack_counts_as_tfl",
 ]
 
 TRANSIENT_GOOGLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -469,6 +469,9 @@ class FootballSpec(SportSpec):
                 "yards": int(yards) if yards is not None else None,
                 "touchdown": int(touchdown_val),
                 "two_point": int(two_point_val),
+                # Compatibility marker: only sacks logged after automatic sack→TFL behavior
+                # was introduced should derive an extra TFL/tackle during aggregation.
+                "sack_counts_as_tfl": 1 if side == "Defense" and stat_type == "Sack" else 0,
             }
             new_rows.append(row)
 
@@ -502,6 +505,12 @@ class FootballSpec(SportSpec):
         df["yards"] = pd.to_numeric(df.get("yards", 0), errors="coerce").fillna(0).astype(int)
         df["touchdown"] = pd.to_numeric(df.get("touchdown", 0), errors="coerce").fillna(0).astype(int)
         df["two_point"] = pd.to_numeric(df.get("two_point", 0), errors="coerce").fillna(0).astype(int)
+        # Existing durable logs pre-date this marker and normalize to blank/0, preserving
+        # their historical Sack + explicit TFL pairing without double-counting.
+        df["sack_counts_as_tfl"] = pd.to_numeric(
+            df["sack_counts_as_tfl"] if "sack_counts_as_tfl" in df else pd.Series(0, index=df.index),
+            errors="coerce",
+        ).fillna(0).astype(int)
 
         grouped = []
         for player_key, grp in df.groupby("player_key"):
@@ -541,14 +550,18 @@ class FootballSpec(SportSpec):
             row["PAT Made"] = int((pat_df["outcome"] == "Made").sum())
 
             row["Forced Fumbles"] = int((grp["stat_type"] == "Forced Fumble").sum())
-            row["Sacks"] = int((grp["stat_type"] == "Sack").sum())
+            sack_mask = grp["stat_type"] == "Sack"
+            row["Sacks"] = int(sack_mask.sum())
             explicit_tfls = int((grp["stat_type"] == "Tackle For Loss").sum())
-            # Every sack is also a tackle for loss and a tackle.
-            row["Tackles For Loss"] = explicit_tfls + row["Sacks"]
+            auto_sack_tfls = int(grp.loc[sack_mask, "sack_counts_as_tfl"].sum())
+            # New sacks carry sack_counts_as_tfl=1 and automatically add a TFL/tackle.
+            # Older sacks carry 0, so a previously logged Sack + TFL pair remains 1 TFL,
+            # not 2, when the durable log is resumed and totals are recalculated.
+            row["Tackles For Loss"] = explicit_tfls + auto_sack_tfls
             row["Tackles"] = (
                 int((grp["stat_type"] == "Tackle").sum())
                 + explicit_tfls
-                + row["Sacks"]
+                + auto_sack_tfls
             )
 
             interception_df = grp[grp["stat_type"] == "Interception"]
