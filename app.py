@@ -419,7 +419,7 @@ class FootballSpec(SportSpec):
                     "Defensive Stat",
                     options=[
                         "Forced Fumble", "Fumble Recovery", "Sack", "Interception", "Tackle",
-                        "Punt Return", "Kickoff Return"
+                        "Tackle For Loss", "Punt Return", "Kickoff Return"
                     ],
                     key="fb_stat_def"
                 )
@@ -540,7 +540,9 @@ class FootballSpec(SportSpec):
 
             row["Forced Fumbles"] = int((grp["stat_type"] == "Forced Fumble").sum())
             row["Sacks"] = int((grp["stat_type"] == "Sack").sum())
-            row["Tackles"] = int((grp["stat_type"] == "Tackle").sum())
+            row["Tackles For Loss"] = int((grp["stat_type"] == "Tackle For Loss").sum())
+            # A TFL is also a tackle, so include it in TotalTackles while tracking TFL separately.
+            row["Tackles"] = int((grp["stat_type"] == "Tackle").sum()) + row["Tackles For Loss"]
 
             interception_df = grp[grp["stat_type"] == "Interception"]
             row["Interceptions"] = int(len(interception_df))
