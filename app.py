@@ -31,7 +31,7 @@ import os
 import re
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
@@ -77,26 +77,10 @@ LOG_COLUMNS = [
 
 TRANSIENT_GOOGLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
-# PR #7 introduced automatic Sack -> TFL/Tackle aggregation at this commit time.
-# Historical app timestamps were written as naive server timestamps; Streamlit-hosted
-# production runs in UTC, so naive values are interpreted as UTC for this one-time
-# compatibility migration.
-SACK_AUTO_TFL_RELEASE_UTC = datetime(2026, 9, 19, 17, 41, 25, tzinfo=timezone.utc)
 
-
-def event_uses_automatic_sack_tfl(timestamp_value) -> bool:
-    text = str(timestamp_value or "").strip()
-    if not text:
-        return False
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        else:
-            parsed = parsed.astimezone(timezone.utc)
-        return parsed >= SACK_AUTO_TFL_RELEASE_UTC
-    except (TypeError, ValueError):
-        return False
+def current_event_timestamp() -> str:
+    """Return a timezone-aware ISO timestamp for newly logged events."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def get_gspread_client():
@@ -258,20 +242,34 @@ def ensure_game_log_worksheet(sh, game: Dict[str, Any]):
                 )
             )
 
-        # PR #7 briefly logged automatic Sack -> TFL behavior before the durable marker
-        # existed. Backfill only those unmarked Sack rows at/after that release. Truly
-        # legacy rows remain blank/0 so historical Sack + explicit TFL pairs are preserved.
-        timestamp_index = headers.index("timestamp")
+        # Backfill unmarked historical sacks only when it is provably safe.
+        # If the same player has any explicit Tackle For Loss rows, leave that player's
+        # old sacks unresolved rather than guessing whether a TFL was separately logged.
+        player_key_index = headers.index("player_key")
         stat_type_index = headers.index("stat_type")
         sack_marker_index = headers.index("sack_counts_as_tfl")
+
+        players_with_explicit_tfl = {
+            row[player_key_index].strip()
+            for row in data_rows
+            if len(row) > max(player_key_index, stat_type_index)
+            and row[stat_type_index].strip() == "Tackle For Loss"
+            and row[player_key_index].strip()
+        }
+
         sack_marker_values = []
         needs_sack_marker_update = False
         for row in data_rows:
             marker = row[sack_marker_index].strip() if len(row) > sack_marker_index else ""
             stat_type = row[stat_type_index].strip() if len(row) > stat_type_index else ""
-            timestamp_value = row[timestamp_index].strip() if len(row) > timestamp_index else ""
+            player_key = row[player_key_index].strip() if len(row) > player_key_index else ""
 
-            if not marker and stat_type == "Sack" and event_uses_automatic_sack_tfl(timestamp_value):
+            if (
+                not marker
+                and stat_type == "Sack"
+                and player_key
+                and player_key not in players_with_explicit_tfl
+            ):
                 marker = "1"
                 needs_sack_marker_update = True
 
@@ -307,6 +305,64 @@ def load_or_create_game_log(sh, game: Dict[str, Any]) -> pd.DataFrame:
     if not records:
         return pd.DataFrame(columns=LOG_COLUMNS)
     return normalize_log_df(pd.DataFrame(records))
+
+
+def unresolved_legacy_sack_rows(logs: pd.DataFrame) -> pd.DataFrame:
+    """Return old Sack rows that cannot be classified safely without human review."""
+    if logs is None or logs.empty:
+        return pd.DataFrame()
+
+    df = normalize_log_df(logs)
+    marker_text = df["sack_counts_as_tfl"].fillna("").astype(str).str.strip()
+    explicit_tfl_players = set(
+        df.loc[df["stat_type"] == "Tackle For Loss", "player_key"].dropna().astype(str)
+    )
+    unresolved = df[
+        (df["stat_type"] == "Sack")
+        & marker_text.eq("")
+        & df["player_key"].astype(str).isin(explicit_tfl_players)
+    ].copy()
+    return unresolved
+
+
+def update_sack_tfl_markers(game: Dict[str, Any], decisions: Dict[str, int]) -> None:
+    """Persist reviewed sack markers by event_id without rewriting any other log fields."""
+    if not decisions:
+        return
+
+    sh = google_retry(lambda: open_sheet(game["sheet_id"]))
+    ws, headers = ensure_game_log_worksheet(sh, game)
+    all_values = google_retry(lambda: ws.get_all_values())
+    data_rows = all_values[1:] if len(all_values) > 1 else []
+
+    event_id_index = headers.index("event_id")
+    marker_index = headers.index("sack_counts_as_tfl")
+    marker_values = []
+    found_ids = set()
+
+    for row in data_rows:
+        event_id = row[event_id_index].strip() if len(row) > event_id_index else ""
+        marker = row[marker_index].strip() if len(row) > marker_index else ""
+        if event_id in decisions:
+            marker = str(int(decisions[event_id]))
+            found_ids.add(event_id)
+        marker_values.append([marker])
+
+    missing_ids = set(decisions) - found_ids
+    if missing_ids:
+        raise ValueError(
+            "Could not find historical sack event(s) in the Google Sheet: "
+            + ", ".join(sorted(missing_ids))
+        )
+
+    marker_col = column_letter(marker_index + 1)
+    end_row = len(marker_values) + 1
+    google_retry(
+        lambda: ws.update(
+            marker_values,
+            range_name=f"{marker_col}2:{marker_col}{end_row}",
+        )
+    )
 
 
 def append_rows_to_game_log(game: Dict[str, Any], rows: List[Dict[str, Any]], attempts: int = 4) -> int:
@@ -503,7 +559,7 @@ class FootballSpec(SportSpec):
         if submitted:
             pr = roster.loc[roster["player_key"] == player_key].iloc[0]
             base_row = {
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "timestamp": current_event_timestamp(),
                 "sport": self.name,
                 "player_key": player_key,
                 "first_name": pr["first_name"],
@@ -723,7 +779,7 @@ class SoccerSpec(SportSpec):
         if submitted:
             pr = roster.loc[roster["player_key"] == player_key].iloc[0]
             base_row = {
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "timestamp": current_event_timestamp(),
                 "sport": self.name,
                 "player_key": player_key,
                 "first_name": pr["first_name"],
@@ -848,7 +904,7 @@ class LacrosseSpec(SportSpec):
         if submitted:
             pr = roster.loc[roster["player_key"] == player_key].iloc[0]
             base = {
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "timestamp": current_event_timestamp(),
                 "sport": self.name,
                 "player_key": player_key,
                 "first_name": pr["first_name"],
@@ -985,7 +1041,7 @@ class BasketballSpec(SportSpec):
         if submitted:
             pr = roster.loc[roster["player_key"] == player_key].iloc[0]
             new_rows.append({
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "timestamp": current_event_timestamp(),
                 "sport": self.name,
                 "player_key": player_key,
                 "first_name": pr["first_name"],
@@ -1123,7 +1179,7 @@ class BaseballSpec(SportSpec):
         if submitted:
             pr = roster.loc[roster["player_key"] == player_key].iloc[0]
             new_rows.append({
-                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "timestamp": current_event_timestamp(),
                 "sport": self.name,
                 "player_key": player_key,
                 "first_name": pr["first_name"],
@@ -1428,11 +1484,66 @@ if not st.session_state.logs.empty:
 
     st.subheader("④ Player Totals (auto-calculated)")
     sport = st.session_state.game["sport"] if st.session_state.game else "Football"
-    totals_df = SPORTS[sport].aggregate_totals(st.session_state.logs)
-    if totals_df is not None and not totals_df.empty:
-        st.dataframe(totals_df, use_container_width=True)
+    unresolved_sacks = (
+        unresolved_legacy_sack_rows(st.session_state.logs)
+        if sport == "Football"
+        else pd.DataFrame()
+    )
+
+    if not unresolved_sacks.empty:
+        st.error(
+            "Historical sack/TFL entries need a one-time review before totals can be recalculated. "
+            "This prevents the app from guessing and double-counting tackles."
+        )
+        with st.expander("Review historical sacks", expanded=True):
+            st.caption(
+                "Select any sack below that already has a separate Tackle For Loss entry. "
+                "Selected sacks will NOT add another TFL; unselected sacks will count as a TFL automatically."
+            )
+
+            sack_options: Dict[str, str] = {}
+            for _, sack_row in unresolved_sacks.iterrows():
+                event_id = str(sack_row.get("event_id", "")).strip()
+                label = (
+                    f"{sack_row.get('player_key', 'Unknown player')} — "
+                    f"{sack_row.get('timestamp', 'unknown time')} — "
+                    f"{event_id[:8]}"
+                )
+                sack_options[label] = event_id
+
+            paired_labels = st.multiselect(
+                "Sacks that already have a separate TFL entry",
+                options=list(sack_options.keys()),
+                key="legacy_sack_tfl_pairs",
+            )
+
+            if st.button("Save historical sack review", type="primary"):
+                paired_ids = {sack_options[label] for label in paired_labels}
+                decisions = {
+                    event_id: (0 if event_id in paired_ids else 1)
+                    for event_id in sack_options.values()
+                }
+                try:
+                    update_sack_tfl_markers(st.session_state.game, decisions)
+                    marker_by_id = decisions
+                    updated_logs = st.session_state.logs.copy()
+                    for idx, log_row in updated_logs.iterrows():
+                        event_id = str(log_row.get("event_id", "")).strip()
+                        if event_id in marker_by_id:
+                            updated_logs.at[idx, "sack_counts_as_tfl"] = marker_by_id[event_id]
+                    st.session_state.logs = normalize_log_df(updated_logs)
+                    st.success("Historical sack review saved.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Unable to save historical sack review: {e}")
+
+        totals_df = pd.DataFrame()
     else:
-        st.info(f"Totals not yet implemented for {sport}.")
+        totals_df = SPORTS[sport].aggregate_totals(st.session_state.logs)
+        if totals_df is not None and not totals_df.empty:
+            st.dataframe(totals_df, use_container_width=True)
+        else:
+            st.info(f"Totals not yet implemented for {sport}.")
 
     def save_to_google_sheets():
         g = st.session_state.game
@@ -1450,12 +1561,19 @@ if not st.session_state.logs.empty:
             write_df_to_worksheet(sh, totals_title, totals_df)
 
     csave1, _ = st.columns([1.4, 6])
-    if csave1.button("💾 Sync / Refresh Totals", type="primary"):
+    totals_blocked = not unresolved_sacks.empty
+    if csave1.button(
+        "💾 Sync / Refresh Totals",
+        type="primary",
+        disabled=totals_blocked,
+    ):
         try:
             save_to_google_sheets()
             st.success("Event log synced and player totals refreshed in Google Sheets.")
         except Exception as e:
             st.error(f"Save failed: {e}")
+    if totals_blocked:
+        st.caption("Resolve the historical sack review above before refreshing totals.")
 
 # ---------------------------
 # Footer / Tips
