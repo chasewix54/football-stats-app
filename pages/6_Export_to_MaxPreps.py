@@ -82,6 +82,10 @@ DEFAULT_FIELD_MAP: Dict[str, str] = {
     "Total Return Yards": "TotalReturnYards",
     "Punts": "PuntNum",
     "Punt Yards": "PuntYards",
+    "Kickoffs": "KickoffNum",
+    "Kickoff Yards": "KickoffYards",
+    "Longest Kickoff": "KickoffLong",
+    "Kickoff Touchbacks": "KickoffTouchbacks",
     "PAT Made": "PATKickingMade",
     "PAT Attempts": "PATKickingAtt",
     "2-pt Rushing Conversions": "PATRushingNum",
@@ -399,7 +403,10 @@ def combine_game_totals(
     field_map: Dict[str, str],
     jersey_column_name: str,
 ) -> pd.DataFrame:
-    """Sum mapped stat columns by jersey across selected game Totals tabs."""
+    """Combine mapped stats by jersey: sum counts/yards and take max of longest plays."""
+    longest_columns = {
+        sheet_col for sheet_col, mp_field in field_map.items() if mp_field.endswith("Long")
+    }
     stat_columns: List[str] = []
     for sheet_col, mp_field in field_map.items():
         if mp_field != "Jersey" and sheet_col not in stat_columns:
@@ -430,7 +437,10 @@ def combine_game_totals(
                     continue
                 numeric = pd.to_numeric(pd.Series([raw]), errors="coerce").iloc[0]
                 if pd.notna(numeric):
-                    bucket[sheet_col] = float(bucket.get(sheet_col, 0) or 0) + float(numeric)
+                    if sheet_col in longest_columns:
+                        bucket[sheet_col] = max(float(bucket.get(sheet_col, 0) or 0), float(numeric))
+                    else:
+                        bucket[sheet_col] = float(bucket.get(sheet_col, 0) or 0) + float(numeric)
                 elif sheet_col not in bucket:
                     bucket[sheet_col] = raw
 
@@ -969,6 +979,10 @@ with st.expander("Developer tools", expanded=False):
                     "Kickoff Returns": 1,
                     "Kickoff Return Yards": 30,
                     "Kickoff Return TDs": 0,
+                    "Kickoffs": 2,
+                    "Kickoff Yards": 111,
+                    "Longest Kickoff": 61,
+                    "Kickoff Touchbacks": 1,
                     "Total Return Yards": 71,
                     "2-pt Rushing Conversions": 1,
                     "2-pt Receiving Conversions": 0,
@@ -1002,6 +1016,10 @@ with st.expander("Developer tools", expanded=False):
                     "Kickoff Returns": 0,
                     "Kickoff Return Yards": 0,
                     "Kickoff Return TDs": 0,
+                    "Kickoffs": 0,
+                    "Kickoff Yards": 0,
+                    "Longest Kickoff": 0,
+                    "Kickoff Touchbacks": 0,
                     "Total Return Yards": 0,
                     "2-pt Rushing Conversions": 0,
                     "2-pt Receiving Conversions": 0,
@@ -1040,6 +1058,14 @@ with st.expander("Developer tools", expanded=False):
             assert "PuntReturnYards" in header
             assert "KickoffReturnNum" in header
             assert "KickoffReturnYards" in header
+            for field, expected in {
+                "KickoffNum": "2",
+                "KickoffYards": "111",
+                "KickoffLong": "61",
+                "KickoffTouchbacks": "1",
+            }.items():
+                assert field in header
+                assert lines[2].split("|")[header.index(field)] == expected
             assert "TotalReturnYards" in header
             assert "PATRushingNum" in header
             assert "PATReceivingNum" in header
@@ -1057,10 +1083,12 @@ with st.expander("Developer tools", expanded=False):
             assert format_game_tab_label("Football 2026-08-21 vs Agoura (Totals)") == "Aug 21, 2026 — Agoura"
 
             game_one = pd.DataFrame([
-                {"number": 12, "Rush Attempts": 5, "Rushing Yards": 42, "Pass Attempts": 8}
+                {"number": 12, "Rush Attempts": 5, "Rushing Yards": 42, "Pass Attempts": 8,
+                 "Kickoffs": 1, "Kickoff Yards": 62, "Longest Kickoff": 62, "Kickoff Touchbacks": 0}
             ])
             game_two = pd.DataFrame([
-                {"number": 12, "Rush Attempts": 3, "Rushing Yards": 20, "Pass Attempts": 4}
+                {"number": 12, "Rush Attempts": 3, "Rushing Yards": 20, "Pass Attempts": 4,
+                 "Kickoffs": 2, "Kickoff Yards": 125, "Longest Kickoff": 70, "Kickoff Touchbacks": 1}
             ])
             combined = combine_game_totals(
                 {"g1": game_one, "g2": game_two},
@@ -1071,6 +1099,10 @@ with st.expander("Developer tools", expanded=False):
             assert int(qb["Rush Attempts"]) == 8
             assert int(qb["Rushing Yards"]) == 62
             assert int(qb["Pass Attempts"]) == 12
+            assert int(qb["Kickoffs"]) == 3
+            assert int(qb["Kickoff Yards"]) == 187
+            assert int(qb["Longest Kickoff"]) == 70  # Max, never sum across games.
+            assert int(qb["Kickoff Touchbacks"]) == 1
 
             zip_bytes = make_zip({"a.txt": "hello", "b.txt": "world"})
             assert len(zip_bytes) > 0
