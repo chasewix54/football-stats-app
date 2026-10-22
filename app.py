@@ -471,12 +471,23 @@ class FootballSpec(SportSpec):
             if side == "Offense":
                 stat_type = c3.selectbox(
                     "Offensive Stat",
-                    options=["Reception", "Run", "Fumble", "Pass", "Field Goal", "Punt", "PAT"],
+                    options=["Reception", "Run", "Fumble", "Pass", "Field Goal", "Punt", "Kickoff", "PAT"],
                     key="fb_stat_off"
                 )
 
-                if stat_type in ("Reception", "Run", "Punt"):
-                    yards = st.number_input("Yards", value=0, step=1, min_value=-99, max_value=300, key="fb_yards")
+                if stat_type in ("Reception", "Run", "Punt", "Kickoff"):
+                    yards = st.number_input(
+                        "Kickoff Distance (yards)" if stat_type == "Kickoff" else "Yards",
+                        value=0, step=1,
+                        min_value=0 if stat_type == "Kickoff" else -99,
+                        max_value=300, key="fb_yards",
+                    )
+                    if stat_type == "Kickoff":
+                        # Use the existing outcome column so older saved game logs stay compatible.
+                        outcome = "Touchback" if st.checkbox(
+                            "Touchback", value=False, key="fb_kickoff_touchback",
+                            help="Check when this kickoff results in a touchback.",
+                        ) else None
                     if stat_type in ("Reception", "Run"):
                         td_flag = st.checkbox("Touchdown", value=False, key="fb_td",
                                               help="Set to 1 if this play scored a TD.")
@@ -637,6 +648,13 @@ class FootballSpec(SportSpec):
 
             row["Punts"] = int((grp["stat_type"] == "Punt").sum())
             row["Punt Yards"] = int(grp.loc[grp["stat_type"] == "Punt", "yards"].sum())
+
+            kickoff_df = grp[grp["stat_type"] == "Kickoff"]
+            row["Kickoffs"] = int(len(kickoff_df))
+            row["Kickoff Yards"] = int(kickoff_df["yards"].sum())
+            row["Longest Kickoff"] = int(kickoff_df["yards"].max()) if not kickoff_df.empty else 0
+            row["Kickoff Touchbacks"] = int((kickoff_df["outcome"] == "Touchback").sum())
+
             row["Fumbles"] = int((grp["stat_type"] == "Fumble").sum())
 
             pass_df = grp[grp["stat_type"] == "Pass"]
